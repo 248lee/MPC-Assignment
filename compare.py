@@ -73,6 +73,21 @@ CONFIG_SIG = np.array([
 ], dtype=np.float64)
 
 
+def _draw_break(ax_hi, ax_lo) -> None:
+    """Draw wavy (~) axis-break marks on the touching edges of two stacked axes."""
+    # a little tilde/squiggle, in axes-fraction coords, drawn at both x-ends
+    n = 60
+    xx = np.linspace(0, 1, n)
+    wiggle = 0.6 * np.sin(np.linspace(0, 3 * np.pi, n))  # ~ shape
+    for ax, edge in ((ax_hi, 0.0), (ax_lo, 1.0)):        # bottom of hi, top of lo
+        for x0 in (0.0, 1.0):                            # left and right corners
+            span = 0.04
+            xs = x0 + (xx - 0.5) * 2 * span
+            ys = edge + wiggle * span
+            ax.plot(xs, ys, transform=ax.transAxes, color="k",
+                    lw=1.2, clip_on=False, zorder=10)
+
+
 def make_env() -> LQREnv:
     return LQREnv(seed=SEED, **ENV_KWARGS)
 
@@ -179,31 +194,70 @@ def main():
         plt.savefig(out, dpi=130)
         plt.close()
 
-    def make_plot_refine(out: str, h_min: int) -> None:
-        """CEM vs. MPPI vs. optimal only, on a LINEAR y-axis."""
+    def make_plot_refine(out: str, h_min: int, y_break: float = 18.0) -> None:
+        """CEM vs. MPPI vs. optimal, with a BROKEN y-axis.
+
+        The bottom panel is linear up to ``y_break`` (where all the interesting
+        behaviour lives); costs above it (the diverging short horizons) are shown
+        on a log-scaled top panel, with squiggle break marks in between.
+        """
         idx = [i for i, H in enumerate(HORIZONS) if H >= h_min]
         hs = [HORIZONS[i] for i in idx]
-        plt.figure(figsize=(9, 5.5))
-        plt.axhline(opt_cost, color="black", ls="--", lw=2,
-                    label=f"Optimal LQR (cost={opt_cost:.2f})")
-        plt.plot(hs, [cem_cost[i] for i in idx], "s-", color="tab:green", label="CEM")
-        plt.plot(hs, [mppi_cost[i] for i in idx], "^-", color="tab:orange", label="MPPI")
-        plt.xlabel("Planning horizon H")
-        plt.ylabel(f"Episode cost  = -reward  (T={T})")
-        plt.title("CEM vs. MPPI vs. Optimal LQR  (lower is better)")
-        plt.legend()
-        plt.grid(True, alpha=0.3)
-        plt.tight_layout()
-        plt.savefig(out, dpi=130)
-        plt.close()
+        cem = [cem_cost[i] for i in idx]
+        mppi = [mppi_cost[i] for i in idx]
+
+        fig, (ax_hi, ax_lo) = plt.subplots(
+            2, 1, sharex=True, figsize=(9, 6),
+            gridspec_kw=dict(height_ratios=[1, 2.6], hspace=0.06),
+        )
+
+        for ax in (ax_hi, ax_lo):
+            ax.axhline(opt_cost, color="black", ls="--", lw=2,
+                       label=f"Optimal LQR (cost={opt_cost:.2f})")
+            ax.plot(hs, cem, "s-", color="tab:green", label="CEM")
+            ax.plot(hs, mppi, "^-", color="tab:orange", label="MPPI")
+            ax.grid(True, alpha=0.3)
+
+        # mark each method's lowest-cost (best) horizon with a star
+        cem_i = int(np.argmin(cem))
+        mppi_i = int(np.argmin(mppi))
+        for ax in (ax_hi, ax_lo):
+            ax.plot(hs[cem_i], cem[cem_i], "*", color="tab:green", ms=20,
+                    mec="black", mew=0.8, zorder=6,
+                    label=f"CEM best (H={hs[cem_i]}, cost={cem[cem_i]:.2f})")
+            ax.plot(hs[mppi_i], mppi[mppi_i], "*", color="tab:orange", ms=20,
+                    mec="black", mew=0.8, zorder=6,
+                    label=f"MPPI best (H={hs[mppi_i]}, cost={mppi[mppi_i]:.2f})")
+
+        # bottom: linear detail range
+        ax_lo.set_ylim(opt_cost - 0.5, y_break)
+        # top: log scale covering the diverging costs
+        big = [c for c in cem + mppi if c > y_break]
+        top_lo = 10 ** np.floor(np.log10(min(big)))
+        top_hi = 10 ** np.ceil(np.log10(max(big)))
+        ax_hi.set_yscale("log")
+        ax_hi.set_ylim(top_lo, top_hi)
+
+        # hide the facing spines and draw the squiggle break marks
+        ax_hi.spines["bottom"].set_visible(False)
+        ax_lo.spines["top"].set_visible(False)
+        ax_hi.tick_params(bottom=False)
+        _draw_break(ax_hi, ax_lo)
+
+        ax_hi.set_title("CEM vs. MPPI vs. Optimal LQR  (lower is better)")
+        ax_lo.set_xlabel("Planning horizon H")
+        fig.supylabel(f"Episode cost  = -reward  (T={T})")
+        ax_hi.legend(loc="upper right")
+        fig.savefig(out, dpi=130, bbox_inches="tight")
+        plt.close(fig)
 
     # full sweep, and a zoomed version starting at H=5 (the H=1..2 blow-ups
     # dominate the log scale and hide the differences between the planners).
     make_plot("compare_reward_vs_horizon.png", h_min=min(HORIZONS))
     make_plot("compare_more_horizon.png", h_min=5)
-    # CEM/MPPI-only, linear scale. Start at H=3 so the (diverging) H=1..2 points
-    # don't flatten everything else against the axis.
-    make_plot_refine("compare_cem_mppi.png", h_min=3)
+    # CEM/MPPI-only, starting at H=1, with a broken y-axis: linear detail below
+    # cost=18, log-scaled diverging costs above the squiggle break.
+    make_plot_refine("compare_cem_mppi.png", h_min=1, y_break=18.0)
     print("-" * 70)
     print("Saved plots to compare_reward_vs_horizon.png, compare_more_horizon.png, "
           "and compare_cem_mppi.png")
