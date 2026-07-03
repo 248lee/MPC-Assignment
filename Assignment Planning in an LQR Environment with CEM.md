@@ -56,6 +56,9 @@ a_t^\top R a_t
 \right).
 $$
 
+Please utilize the code in `lqr_env.py` as your environment. 
+
+
 
 ## Phase I — Implement MPC with Finite-Horizon Random Shooting
 
@@ -182,4 +185,4 @@ When does the terminal value function help the most? Is it more useful for short
 
 
 
-學長寫的版本: https://github.com/248lee/MPC-Assignment
+學長寫的程式碼: https://github.com/248lee/MPC-Assignment

@@ -36,10 +36,13 @@ import matplotlib
 matplotlib.use("Agg")  # headless backend
 import matplotlib.pyplot as plt
 
+import torch
+
 from lqr_env import LQREnv
 from optimal import LQRController, run_episode as run_optimal_episode
 from phase1 import RandomShootingMPC, run_episode as run_mpc_episode
 from phase2 import CEMPlanner, MPPIPlanner, run_episode as run_plan_episode
+from sac_lqr import GaussianPolicy, STATE_DIM, ACTION_DIM
 
 
 # --------------------------------------------------------------------------- #
@@ -64,6 +67,33 @@ TEMPERATURE = 20.0                         # MPPI softmax lambda
 
 
 RESULTS_FILE = "compare_results.npz"
+SAC_MODEL_FILE = "sac_lqr.pt"              # trained SAC actor (sac_lqr.py)
+
+
+class SACPolicy:
+    """Deterministic (mean-action) wrapper around a trained SAC actor.
+
+    Exposes ``.act(state)`` so it plugs into ``run_optimal_episode`` exactly
+    like the analytical ``LQRController``. SAC is a *reactive* policy with no
+    planning horizon, so on the cost-vs-horizon figure it is a horizontal line.
+    """
+
+    def __init__(self, path: str):
+        ckpt = torch.load(path, map_location="cpu", weights_only=False)
+        cfg = ckpt["config"]
+        self.actor = GaussianPolicy(
+            STATE_DIM, ACTION_DIM, tuple(cfg["hidden"]),
+            cfg["action_low"], cfg["action_high"],
+        )
+        self.actor.load_state_dict(ckpt["actor"])
+        self.actor.eval()
+        self.meta = ckpt.get("meta", {})
+
+    def act(self, state: np.ndarray) -> np.ndarray:
+        s = torch.as_tensor(state, dtype=torch.float32).unsqueeze(0)
+        with torch.no_grad():
+            _, _, mean_action = self.actor.sample(s)
+        return mean_action.squeeze(0).numpy()
 
 # A signature of everything that affects the numbers. If any of it changes, the
 # cached results are stale and the sweep is re-run automatically.
@@ -174,6 +204,19 @@ def main():
     cem_cost = [-r for r in cem_rewards]
     # mppi_cost = [-r for r in mppi_rewards]
 
+    # trained SAC policy: same env / init state / horizon as the optimal run,
+    # so it appears as a horizontal dashed line (reactive policy, no planning H).
+    sac_cost = None
+    if os.path.exists(SAC_MODEL_FILE):
+        sac = SACPolicy(SAC_MODEL_FILE)
+        sac_reward, _ = run_optimal_episode(make_env(), sac, init_state=INIT_STATE, T=T)
+        sac_cost = -sac_reward
+        print(f"[SAC]          episode reward (T={T}): {sac_reward:.3f}  "
+              f"-> cost {sac_cost:.3f}")
+    else:
+        print(f"[SAC]  {SAC_MODEL_FILE} not found -> skipping SAC line "
+              f"(train it with sac_lqr.py).")
+
     def make_plot(out: str, h_min: int) -> None:
         """Save the cost-vs-horizon figure, keeping only horizons >= h_min."""
         idx = [i for i, H in enumerate(HORIZONS) if H >= h_min]
@@ -181,6 +224,9 @@ def main():
         plt.figure(figsize=(9, 5.5))
         plt.axhline(opt_cost, color="black", ls="--", lw=2,
                     label=f"Optimal LQR (cost={opt_cost:.2f})")
+        if sac_cost is not None:
+            plt.axhline(sac_cost, color="tab:red", ls="--", lw=2,
+                        label=f"SAC (cost={sac_cost:.2f})")
         plt.plot(hs, [mpc_cost[i] for i in idx], "o-", color="tab:blue",
                  label="Random-shooting MPC")
         plt.plot(hs, [cem_cost[i] for i in idx], "s-", color="tab:green", label="CEM")
@@ -214,6 +260,9 @@ def main():
         for ax in (ax_hi, ax_lo):
             ax.axhline(opt_cost, color="black", ls="--", lw=2,
                        label=f"Optimal LQR (cost={opt_cost:.2f})")
+            if sac_cost is not None:
+                ax.axhline(sac_cost, color="tab:red", ls="--", lw=2,
+                           label=f"SAC (cost={sac_cost:.2f})")
             ax.plot(hs, cem, "s-", color="tab:green", label="CEM")
             ax.grid(True, alpha=0.3)
 

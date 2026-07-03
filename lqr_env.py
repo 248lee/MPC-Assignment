@@ -1,3 +1,5 @@
+# 這個程式碼是給學生使用的 gymnasium-style LQR 環境。如果你不知道什麼是 gymnasium 的話，可以問問 AI 或來實驗室問學長姐~
+
 """
 LQR Environment (3D state, 3D action)
 =====================================
