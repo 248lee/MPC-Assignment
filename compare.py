@@ -40,6 +40,7 @@ from lqr_env import LQREnv
 from optimal import LQRController, run_episode as run_optimal_episode
 from phase1 import RandomShootingMPC, run_episode as run_mpc_episode
 from phase2 import CEMPlanner, MPPIPlanner, run_episode as run_plan_episode
+from IGO import IGOPlanner
 
 
 # --------------------------------------------------------------------------- #
@@ -62,6 +63,12 @@ CEM_ITERS = 1000                           # CEM max iterations per step (rely o
 MPPI_ITERS = 1000                          # MPPI max iterations per step (rely on tol)
 TEMPERATURE = 20.0                         # MPPI softmax lambda
 
+# IGO-ML specifics.  Same proposal/elites as CEM, but a soft update with step
+# size IGO_DT (< 1) plus a variance-injection term that resists premature
+# convergence.  IGO_DT = 1 would recover CEM exactly.
+IGO_ITERS = 1000                           # IGO max iterations per step (rely on tol)
+IGO_DT = 0.5                               # IGO-ML step size (soft update rate)
+
 
 RESULTS_FILE = "compare_results.npz"
 
@@ -69,7 +76,8 @@ RESULTS_FILE = "compare_results.npz"
 # cached results are stale and the sweep is re-run automatically.
 CONFIG_SIG = np.array([
     T, NUM_SAMPLES, SIGMA, SEED, REFINE_SIGMA, NUM_ELITES,
-    CEM_ITERS, MPPI_ITERS, TEMPERATURE, *INIT_STATE, *HORIZONS,
+    CEM_ITERS, MPPI_ITERS, TEMPERATURE, IGO_ITERS, IGO_DT,
+    *INIT_STATE, *HORIZONS,
 ], dtype=np.float64)
 
 
@@ -103,8 +111,8 @@ def run_sweep():
     print("-" * 70)
 
     # ---- 2) planners over horizons -------------------------------------- #
-    mpc_rewards, cem_rewards, mppi_rewards = [], [], []
-    print(f"{'H':>3} | {'MPC reward':>14} | {'CEM reward':>14} | {'MPPI reward':>14}")
+    mpc_rewards, cem_rewards, mppi_rewards, igo_rewards = [], [], [], []
+    print(f"{'H':>3} | {'MPC reward':>14} | {'CEM reward':>14} | {'IGO reward':>14}")
     print("-" * 70)
     for H in HORIZONS:
         env = make_env()
@@ -120,6 +128,13 @@ def run_sweep():
         )
         r_cem, _ = run_plan_episode(env, cem, init_state=INIT_STATE, T=T)
 
+        env = make_env()
+        igo = IGOPlanner(
+            env, horizon=H, num_samples=NUM_SAMPLES, num_elites=NUM_ELITES,
+            max_iters=IGO_ITERS, sigma_init=REFINE_SIGMA, dt=IGO_DT, seed=SEED,
+        )
+        r_igo, _ = run_plan_episode(env, igo, init_state=INIT_STATE, T=T)
+
         # env = make_env()
         # mppi = MPPIPlanner(
         #     env, horizon=H, num_samples=NUM_SAMPLES, temperature=TEMPERATURE,
@@ -129,15 +144,17 @@ def run_sweep():
 
         mpc_rewards.append(r_mpc)
         cem_rewards.append(r_cem)
+        igo_rewards.append(r_igo)
         # mppi_rewards.append(r_mppi)
         # print(f"{H:>3} | {r_mpc:>14.3f} | {r_cem:>14.3f} | {r_mppi:>14.3f}")
-        print(f"{H:>3} | {r_mpc:>14.3f} | {r_cem:>14.3f} ")  # 這裡先不要有 MPPI 要的話再上面那一行
+        print(f"{H:>3} | {r_mpc:>14.3f} | {r_cem:>14.3f} | {r_igo:>14.3f}")
 
     results = dict(
         horizons=np.array(HORIZONS),
         opt_reward=np.float64(opt_reward),
         mpc_rewards=np.array(mpc_rewards),
         cem_rewards=np.array(cem_rewards),
+        igo_rewards=np.array(igo_rewards),
         # mppi_rewards=np.array(mppi_rewards),
         config_sig=CONFIG_SIG,
     )
@@ -166,12 +183,14 @@ def main():
     opt_reward = float(results["opt_reward"])
     mpc_rewards = list(results["mpc_rewards"])
     cem_rewards = list(results["cem_rewards"])
+    igo_rewards = list(results["igo_rewards"])
     # mppi_rewards = list(results["mppi_rewards"])
 
     # ---- 3) plot (cost = -reward, log scale) ---------------------------- #
     opt_cost = -opt_reward
     mpc_cost = [-r for r in mpc_rewards]
     cem_cost = [-r for r in cem_rewards]
+    igo_cost = [-r for r in igo_rewards]
     # mppi_cost = [-r for r in mppi_rewards]
 
     def make_plot(out: str, h_min: int) -> None:
@@ -184,6 +203,7 @@ def main():
         plt.plot(hs, [mpc_cost[i] for i in idx], "o-", color="tab:blue",
                  label="Random-shooting MPC")
         plt.plot(hs, [cem_cost[i] for i in idx], "s-", color="tab:green", label="CEM")
+        plt.plot(hs, [igo_cost[i] for i in idx], "d-", color="tab:red", label="IGO-ML")
         # plt.plot(hs, [mppi_cost[i] for i in idx], "^-", color="tab:orange", label="MPPI")
         plt.yscale("log")
         plt.xlabel("Planning horizon H")
@@ -196,7 +216,7 @@ def main():
         plt.close()
 
     def make_plot_refine(out: str, h_min: int, y_break: float = 18.0) -> None:
-        """CEM vs. optimal, with a BROKEN y-axis.
+        """CEM & IGO-ML vs. optimal, with a BROKEN y-axis.
 
         The bottom panel is linear up to ``y_break`` (where all the interesting
         behaviour lives); costs above it (the diverging short horizons) are shown
@@ -205,6 +225,7 @@ def main():
         idx = [i for i, H in enumerate(HORIZONS) if H >= h_min]
         hs = [HORIZONS[i] for i in idx]
         cem = [cem_cost[i] for i in idx]
+        igo = [igo_cost[i] for i in idx]
 
         fig, (ax_hi, ax_lo) = plt.subplots(
             2, 1, sharex=True, figsize=(9, 6),
@@ -215,19 +236,24 @@ def main():
             ax.axhline(opt_cost, color="black", ls="--", lw=2,
                        label=f"Optimal LQR (cost={opt_cost:.2f})")
             ax.plot(hs, cem, "s-", color="tab:green", label="CEM")
+            ax.plot(hs, igo, "d-", color="tab:red", label="IGO-ML")
             ax.grid(True, alpha=0.3)
 
-        # mark CEM's lowest-cost (best) horizon with a star
+        # mark each planner's lowest-cost (best) horizon with a star
         cem_i = int(np.argmin(cem))
+        igo_i = int(np.argmin(igo))
         for ax in (ax_hi, ax_lo):
             ax.plot(hs[cem_i], cem[cem_i], "*", color="tab:green", ms=20,
                     mec="black", mew=0.8, zorder=6,
                     label=f"CEM best (H={hs[cem_i]}, cost={cem[cem_i]:.2f})")
+            ax.plot(hs[igo_i], igo[igo_i], "*", color="tab:red", ms=20,
+                    mec="black", mew=0.8, zorder=6,
+                    label=f"IGO-ML best (H={hs[igo_i]}, cost={igo[igo_i]:.2f})")
 
         # bottom: linear detail range
         ax_lo.set_ylim(opt_cost - 0.5, y_break)
         # top: log scale covering the diverging costs
-        big = [c for c in cem if c > y_break]
+        big = [c for c in cem + igo if c > y_break]
         top_lo = 10 ** np.floor(np.log10(min(big)))
         top_hi = 10 ** np.ceil(np.log10(max(big)))
         ax_hi.set_yscale("log")
@@ -239,7 +265,7 @@ def main():
         ax_hi.tick_params(bottom=False)
         _draw_break(ax_hi, ax_lo)
 
-        ax_hi.set_title("CEM vs. Optimal LQR  (lower is better)")
+        ax_hi.set_title("CEM & IGO-ML vs. Optimal LQR  (lower is better)")
         ax_lo.set_xlabel("Planning horizon H")
         fig.supylabel(f"Episode cost  = -reward  (T={T})")
         ax_hi.legend(loc="upper right")
@@ -260,10 +286,12 @@ def main():
     # ---- 4) takeaways --------------------------------------------------- #
     best_H = HORIZONS[int(np.argmax(mpc_rewards))]
     best_H_cem = HORIZONS[int(np.argmax(cem_rewards))]
+    best_H_igo = HORIZONS[int(np.argmax(igo_rewards))]
     # best_H_mppi = HORIZONS[int(np.argmax(mppi_rewards))]
     print(f"\nOptimal episode reward          : {opt_reward:10.3f}")
     print(f"Best random-shooting MPC : H={best_H:<3} reward {max(mpc_rewards):10.3f}")
     print(f"Best CEM                 : H={best_H_cem:<3} reward {max(cem_rewards):10.3f}")
+    print(f"Best IGO-ML              : H={best_H_igo:<3} reward {max(igo_rewards):10.3f}")
     # print(f"Best MPPI                : H={best_H_mppi:<3} reward {max(mppi_rewards):10.3f}")
     print(f"\nH=1  random-shooting MPC : {mpc_rewards[0]:.3e}  (diverges -- short-horizon failure)")
     print("=> Refining the sampling distribution (CEM / MPPI) keeps planning close")
