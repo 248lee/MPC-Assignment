@@ -1,3 +1,5 @@
+Github branch: https://github.com/248lee/MPC-Assignment/tree/PolicyPriorCEM
+
 # 2026/07/03 實驗報告書
 
 這次實作了將 SAC Policy 用於 CEM 的 Policy Prior 上，並使用一樣的 MPC 演算法 rollout 同樣的 LQR system。
@@ -55,7 +57,7 @@ $$\mu[h] = \text{SAC mean action}, \quad \sigma[h] = 5.0 \times \text{SAC action
 
 ----------------------------------------------------------------------
   H |     MPC reward |     CEM reward |  PolPrior reward
-----------------------------------------------------------------------
+
   1 | -202005272151307848517681152.000 | -232804925955544543412617216.000 |        -2838.304
   2 |        -15.876 |         -2.497 |           -2.466
   3 |        -50.118 |         -2.487 |           -2.466
@@ -77,7 +79,5 @@ $$\mu[h] = \text{SAC mean action}, \quad \sigma[h] = 5.0 \times \text{SAC action
  19 |       -915.099 |         -5.265 |          -13.688
  20 |      -1464.449 |         -5.701 |          -15.061
 Saved results to compare_results.npz
-[SAC]          episode reward (T=200): -2.988  -> cost 2.988
-----------------------------------------------------------------------
 
 不過，在 $H$ 夠小的時候確實有 policy prior 會好一些。
