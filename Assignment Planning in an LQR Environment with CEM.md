@@ -1,4 +1,4 @@
-# Assignment: Planning in an LQR Environment with CEM and MPPI
+# Assignment: Planning in an LQR Environment with CEM
 
 ## Why this assignment is important
 
@@ -23,12 +23,12 @@ At every timestep, MPC does the following:
 5. observes the next state,
 6. replans again.
 
-This is used in many MBRL methods, such as PETS, MBPO-style planning, TD-MPC, TD-MPC2, and MPPI-based robot control.
+This is used in many MBRL methods, such as PETS, MBPO-style planning, TD-MPC, and TD-MPC2.
 
 The assignment help our cute new members understand:
 
 1. how MPC works,
-2. how CEM and MPPI optimize action sequences,
+2. how CEM optimizes action sequences,
 3. why planning horizon matters,
 4. when a terminal value function matters and when it does not.
 
@@ -84,9 +84,9 @@ and plot a graph for episode (truncate at 10,000 steps) reward vs. planning hori
 
 
 
-## Phase II — Implement CEM and MPPI
+## Phase II — Implement CEM
 
-In Phase I, random shooting samples every action sequence from a **fixed** proposal distribution and simply keeps the best one. Most of the samples are wasted in low-reward regions. CEM and MPPI fix this by **refining the sampling distribution** across iterations so that samples concentrate where the high-return action sequences actually live.
+In Phase I, random shooting samples every action sequence from a **fixed** proposal distribution and simply keeps the best one. Most of the samples are wasted in low-reward regions. CEM fixes this by **refining the sampling distribution** across iterations so that samples concentrate where the high-return action sequences actually live.
 
 Both are still used as the inner loop of MPC: at every timestep we replan from the current state, execute only the first action, and **warm start** the next timestep with the (shifted) solution we just found.
 
@@ -131,50 +131,6 @@ warm start: mu <- [mu_1, ..., mu_{H-1}, 0],  reset sigma for next timestep
 
 Convergence: stop when the mean stops moving ($\|\mu-\mu_{prev}\|<\varepsilon_\mu$), **or** the distribution has collapsed ($\max\sigma<\varepsilon_\sigma$), **or** the iteration budget $I$ is reached.
 
-### MPPI (Model Predictive Path Integral)
-
-MPPI keeps a single **nominal** control sequence $\mu$. Each iteration it samples $N$ noisy perturbations of the nominal, scores them, and updates the nominal with a **softmax (reward-weighted) average** of all samples — nothing is thrown away. The temperature $\lambda$ controls softness: $\lambda\to 0$ is greedy (only the best matters), $\lambda\to\infty$ is a plain average.
-
-```
-Input: state s, horizon H, samples N, temperature lambda, noise std sigma,
-       max_iters I, tolerance eps (first-action mean change),
-       warm-started nominal control sequence mu (H x adim)
-
-i = 0
-repeat:
-    a0_prev = mu_0
-
-    # 1. sample N sequences as noisy perturbations of the nominal
-    for n = 1 ... N:
-        eps^(n) ~ N(0, sigma^2)          # shape H x adim
-        a^(n) = clip(mu + eps^(n), a_low, a_high)
-
-    # 2. evaluate each sequence with the known model
-    for n = 1 ... N:
-        s_hat = s ; R^(n) = 0
-        for h = 0 ... H-1:
-            R^(n) += gamma^h * r(s_hat, a^(n)_h)
-            s_hat  = A s_hat + B a^(n)_h
-
-    # 3. softmax (exponential) weights over returns
-    beta  = max_n R^(n)                   # baseline for numerical stability
-    w^(n) = exp((R^(n) - beta) / lambda)
-    w^(n) = w^(n) / sum_m w^(m)           # normalize, sum w = 1
-
-    # 4. update nominal by reward-weighted average
-    mu = sum_n w^(n) * a^(n)
-
-    i = i + 1
-until  ||mu_0 - a0_prev|| < eps   OR   i >= I
-
-execute a_0 = mu_0
-warm start: mu <- [mu_1, ..., mu_{H-1}, 0] for next timestep
-```
-
-Convergence: stop when the first action's mean stops moving ($\|\mu_0-\mu_0^{prev}\|<\varepsilon$) — since only $a_0$ is actually executed, its stability means the plan has stabilized — **or** the iteration budget $I$ is reached.
-
-One-line difference: **CEM = refit mean+std to top-$K$ elites; MPPI = exp-weighted average update of the mean.**
-
 ###### Experiment
 
 Please try the following planning horizons:
@@ -196,12 +152,10 @@ V(s_H).
 $$
 Repeat the experiments from Phase II.
 
-Compare four methods:
+Compare two methods:
 
 1. CEM-MPC without terminal value
 2. CEM-MPC with terminal value
-3. MPPI-MPC without terminal value
-4. MPPI-MPC with terminal value
 
 Use the same planning horizons:
 $$

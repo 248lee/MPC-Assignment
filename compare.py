@@ -58,8 +58,8 @@ SEED = 0
 # just wastes samples.  These were tuned to sit close to the optimal cost.
 REFINE_SIGMA = 0.2                         # proposal/noise std for CEM & MPPI
 NUM_ELITES = 50                            # CEM top-K
-CEM_ITERS = 30                             # CEM max iterations per step
-MPPI_ITERS = 15                            # MPPI max iterations per step
+CEM_ITERS = 1000                           # CEM max iterations per step (rely on tol)
+MPPI_ITERS = 1000                          # MPPI max iterations per step (rely on tol)
 TEMPERATURE = 20.0                         # MPPI softmax lambda
 
 
@@ -120,24 +120,25 @@ def run_sweep():
         )
         r_cem, _ = run_plan_episode(env, cem, init_state=INIT_STATE, T=T)
 
-        env = make_env()
-        mppi = MPPIPlanner(
-            env, horizon=H, num_samples=NUM_SAMPLES, temperature=TEMPERATURE,
-            sigma=REFINE_SIGMA, max_iters=MPPI_ITERS, seed=SEED,
-        )
-        r_mppi, _ = run_plan_episode(env, mppi, init_state=INIT_STATE, T=T)
+        # env = make_env()
+        # mppi = MPPIPlanner(
+        #     env, horizon=H, num_samples=NUM_SAMPLES, temperature=TEMPERATURE,
+        #     sigma=REFINE_SIGMA, max_iters=MPPI_ITERS, seed=SEED,
+        # )
+        # r_mppi, _ = run_plan_episode(env, mppi, init_state=INIT_STATE, T=T)
 
         mpc_rewards.append(r_mpc)
         cem_rewards.append(r_cem)
-        mppi_rewards.append(r_mppi)
-        print(f"{H:>3} | {r_mpc:>14.3f} | {r_cem:>14.3f} | {r_mppi:>14.3f}")
+        # mppi_rewards.append(r_mppi)
+        # print(f"{H:>3} | {r_mpc:>14.3f} | {r_cem:>14.3f} | {r_mppi:>14.3f}")
+        print(f"{H:>3} | {r_mpc:>14.3f} | {r_cem:>14.3f} ")  # 這裡先不要有 MPPI 要的話再上面那一行
 
     results = dict(
         horizons=np.array(HORIZONS),
         opt_reward=np.float64(opt_reward),
         mpc_rewards=np.array(mpc_rewards),
         cem_rewards=np.array(cem_rewards),
-        mppi_rewards=np.array(mppi_rewards),
+        # mppi_rewards=np.array(mppi_rewards),
         config_sig=CONFIG_SIG,
     )
     np.savez(RESULTS_FILE, **results)
@@ -165,13 +166,13 @@ def main():
     opt_reward = float(results["opt_reward"])
     mpc_rewards = list(results["mpc_rewards"])
     cem_rewards = list(results["cem_rewards"])
-    mppi_rewards = list(results["mppi_rewards"])
+    # mppi_rewards = list(results["mppi_rewards"])
 
     # ---- 3) plot (cost = -reward, log scale) ---------------------------- #
     opt_cost = -opt_reward
     mpc_cost = [-r for r in mpc_rewards]
     cem_cost = [-r for r in cem_rewards]
-    mppi_cost = [-r for r in mppi_rewards]
+    # mppi_cost = [-r for r in mppi_rewards]
 
     def make_plot(out: str, h_min: int) -> None:
         """Save the cost-vs-horizon figure, keeping only horizons >= h_min."""
@@ -183,7 +184,7 @@ def main():
         plt.plot(hs, [mpc_cost[i] for i in idx], "o-", color="tab:blue",
                  label="Random-shooting MPC")
         plt.plot(hs, [cem_cost[i] for i in idx], "s-", color="tab:green", label="CEM")
-        plt.plot(hs, [mppi_cost[i] for i in idx], "^-", color="tab:orange", label="MPPI")
+        # plt.plot(hs, [mppi_cost[i] for i in idx], "^-", color="tab:orange", label="MPPI")
         plt.yscale("log")
         plt.xlabel("Planning horizon H")
         plt.ylabel(f"Episode cost  = -reward  (T={T}, log scale)")
@@ -195,7 +196,7 @@ def main():
         plt.close()
 
     def make_plot_refine(out: str, h_min: int, y_break: float = 18.0) -> None:
-        """CEM vs. MPPI vs. optimal, with a BROKEN y-axis.
+        """CEM vs. optimal, with a BROKEN y-axis.
 
         The bottom panel is linear up to ``y_break`` (where all the interesting
         behaviour lives); costs above it (the diverging short horizons) are shown
@@ -204,7 +205,6 @@ def main():
         idx = [i for i, H in enumerate(HORIZONS) if H >= h_min]
         hs = [HORIZONS[i] for i in idx]
         cem = [cem_cost[i] for i in idx]
-        mppi = [mppi_cost[i] for i in idx]
 
         fig, (ax_hi, ax_lo) = plt.subplots(
             2, 1, sharex=True, figsize=(9, 6),
@@ -215,24 +215,19 @@ def main():
             ax.axhline(opt_cost, color="black", ls="--", lw=2,
                        label=f"Optimal LQR (cost={opt_cost:.2f})")
             ax.plot(hs, cem, "s-", color="tab:green", label="CEM")
-            ax.plot(hs, mppi, "^-", color="tab:orange", label="MPPI")
             ax.grid(True, alpha=0.3)
 
-        # mark each method's lowest-cost (best) horizon with a star
+        # mark CEM's lowest-cost (best) horizon with a star
         cem_i = int(np.argmin(cem))
-        mppi_i = int(np.argmin(mppi))
         for ax in (ax_hi, ax_lo):
             ax.plot(hs[cem_i], cem[cem_i], "*", color="tab:green", ms=20,
                     mec="black", mew=0.8, zorder=6,
                     label=f"CEM best (H={hs[cem_i]}, cost={cem[cem_i]:.2f})")
-            ax.plot(hs[mppi_i], mppi[mppi_i], "*", color="tab:orange", ms=20,
-                    mec="black", mew=0.8, zorder=6,
-                    label=f"MPPI best (H={hs[mppi_i]}, cost={mppi[mppi_i]:.2f})")
 
         # bottom: linear detail range
         ax_lo.set_ylim(opt_cost - 0.5, y_break)
         # top: log scale covering the diverging costs
-        big = [c for c in cem + mppi if c > y_break]
+        big = [c for c in cem if c > y_break]
         top_lo = 10 ** np.floor(np.log10(min(big)))
         top_hi = 10 ** np.ceil(np.log10(max(big)))
         ax_hi.set_yscale("log")
@@ -244,7 +239,7 @@ def main():
         ax_hi.tick_params(bottom=False)
         _draw_break(ax_hi, ax_lo)
 
-        ax_hi.set_title("CEM vs. MPPI vs. Optimal LQR  (lower is better)")
+        ax_hi.set_title("CEM vs. Optimal LQR  (lower is better)")
         ax_lo.set_xlabel("Planning horizon H")
         fig.supylabel(f"Episode cost  = -reward  (T={T})")
         ax_hi.legend(loc="upper right")
@@ -255,7 +250,7 @@ def main():
     # dominate the log scale and hide the differences between the planners).
     make_plot("compare_reward_vs_horizon.png", h_min=min(HORIZONS))
     make_plot("compare_more_horizon.png", h_min=5)
-    # CEM/MPPI-only, starting at H=1, with a broken y-axis: linear detail below
+    # CEM-only, starting at H=1, with a broken y-axis: linear detail below
     # cost=18, log-scaled diverging costs above the squiggle break.
     make_plot_refine("compare_cem_mppi.png", h_min=1, y_break=18.0)
     print("-" * 70)
@@ -265,11 +260,11 @@ def main():
     # ---- 4) takeaways --------------------------------------------------- #
     best_H = HORIZONS[int(np.argmax(mpc_rewards))]
     best_H_cem = HORIZONS[int(np.argmax(cem_rewards))]
-    best_H_mppi = HORIZONS[int(np.argmax(mppi_rewards))]
+    # best_H_mppi = HORIZONS[int(np.argmax(mppi_rewards))]
     print(f"\nOptimal episode reward          : {opt_reward:10.3f}")
     print(f"Best random-shooting MPC : H={best_H:<3} reward {max(mpc_rewards):10.3f}")
     print(f"Best CEM                 : H={best_H_cem:<3} reward {max(cem_rewards):10.3f}")
-    print(f"Best MPPI                : H={best_H_mppi:<3} reward {max(mppi_rewards):10.3f}")
+    # print(f"Best MPPI                : H={best_H_mppi:<3} reward {max(mppi_rewards):10.3f}")
     print(f"\nH=1  random-shooting MPC : {mpc_rewards[0]:.3e}  (diverges -- short-horizon failure)")
     print("=> Refining the sampling distribution (CEM / MPPI) keeps planning close")
     print("   to optimal across horizons instead of degrading for large H.")

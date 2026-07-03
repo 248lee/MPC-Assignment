@@ -53,7 +53,7 @@ class CEMPlanner:
         horizon: int = 15,
         num_samples: int = 1000,
         num_elites: int = 50,
-        max_iters: int = 30,
+        max_iters: int = 1000,
         sigma_init: float = 0.2,
         tol_mu: float = 1e-3,
         tol_sigma: float = 1e-3,
@@ -96,7 +96,7 @@ class CEMPlanner:
         mu = self.mu                              # warm-started mean
         sigma = np.full((H, adim), self.sigma_init)   # reset exploration
 
-        for _ in range(self.max_iters):
+        for times in range(self.max_iters):
             mu_prev = mu
 
             # 1. sample + clip
@@ -117,8 +117,11 @@ class CEMPlanner:
             # convergence
             if np.linalg.norm(mu - mu_prev) < self.tol_mu or sigma.max() < self.tol_sigma:
                 break
+            # print(f"\riter {times:4d}  sigma.max={sigma.max():.5f}", end="", flush=True)
 
         action = mu[0].copy()
+        if times == self.max_iters - 1:
+            print("\nHit Max Iter")
         # warm start: shift the plan forward by one step
         self.mu = np.vstack([mu[1:], np.zeros((1, adim))])
         return action
@@ -138,7 +141,7 @@ class MPPIPlanner:
         num_samples: int = 1000,
         temperature: float = 20.0,
         sigma: float = 0.2,
-        max_iters: int = 15,
+        max_iters: int = 1000,
         tol: float = 1e-3,
         gamma: float = 1.0,
         seed: int | None = None,
@@ -177,7 +180,7 @@ class MPPIPlanner:
 
         mu = self.mu                              # warm-started nominal
 
-        for _ in range(self.max_iters):
+        for times in range(self.max_iters):
             a0_prev = mu[0].copy()
 
             # 1. sample noisy perturbations of the nominal + clip
@@ -200,6 +203,8 @@ class MPPIPlanner:
                 break
 
         action = mu[0].copy()
+        # if times == self.max_iters - 1:
+        #     print("\nHit Max Iter")
         # warm start: shift the nominal forward by one step
         self.mu = np.vstack([mu[1:], np.zeros((1, adim))])
         return action
@@ -239,7 +244,7 @@ if __name__ == "__main__":
     print(f"CEM  (H=15, N=1000, K=50) reward (T=200): {total:.4f}")
     print(f"  final state: {np.round(traj[-1], 5)}")
 
-    mppi = MPPIPlanner(env, horizon=15, num_samples=1000, seed=0)
-    total, traj = run_episode(env, mppi, init_state=s0, T=200)
-    print(f"MPPI (H=15, N=1000, lambda=20) reward (T=200): {total:.4f}")
-    print(f"  final state: {np.round(traj[-1], 5)}")
+    # mppi = MPPIPlanner(env, horizon=15, num_samples=1000, seed=0)
+    # total, traj = run_episode(env, mppi, init_state=s0, T=200)
+    # print(f"MPPI (H=15, N=1000, lambda=20) reward (T=200): {total:.4f}")
+    # print(f"  final state: {np.round(traj[-1], 5)}")
