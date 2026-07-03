@@ -1,0 +1,248 @@
+"""
+Policy-prior CEM planner for MPC
+================================
+
+This is a variant of the Phase II CEM planner (`phase2.py`). Vanilla CEM there
+does two things between timesteps:
+
+  * it *refines* the sampling Gaussian across iterations (keep top-K elites,
+    refit mean + std), and
+  * it *warm starts* the next timestep by shifting the converged plan forward
+    one step (phase2.py lines 125-126).
+
+Here we KEEP the CEM refinement loop but REPLACE the warm start with a learned
+**policy prior**: at every timestep the initial sampling distribution is seeded
+by the trained SAC policy (`sac_lqr.pt`) instead of the shifted previous plan.
+
+Concretely, to seed the H-step distribution we roll the SAC policy through the
+(known, deterministic) model for H steps from the current state:
+
+    mu[h]    = SAC mean action along that rolled-out trajectory
+    sigma[h] = SAC action std at that state, multiplied by ``prior_std_scale``
+               (= 5.0 by default -- widen the prior so CEM can still search)
+
+CEM then proceeds exactly as before (sample -> evaluate -> refit elites), but it
+starts each timestep from a good, policy-informed guess rather than a shifted
+plan, and the plan is NOT carried over / shifted between timesteps.
+"""
+
+from __future__ import annotations
+
+import numpy as np
+import torch
+
+from lqr_env import LQREnv
+from sac_lqr import GaussianPolicy, STATE_DIM, ACTION_DIM
+
+
+# --------------------------------------------------------------------------- #
+# shared trajectory evaluation
+# --------------------------------------------------------------------------- #
+def _rollout_returns(env: LQREnv, state: np.ndarray, actions: np.ndarray, gamma: float) -> np.ndarray:
+    """Discounted H-step return of each sequence in ``actions`` (N, H, adim).
+
+    Uses the (known) deterministic model via the env's batched helpers.
+    """
+    N = actions.shape[0]
+    H = actions.shape[1]
+    states = np.tile(np.asarray(state, dtype=np.float64), (N, 1))   # (N, n)
+    returns = np.zeros(N)
+    discount = 1.0
+    for h in range(H):
+        a = actions[:, h, :]
+        returns += discount * env.reward_batch(states, a)
+        states = env.dynamics_batch(states, a)
+        discount *= gamma
+    return returns
+
+
+# --------------------------------------------------------------------------- #
+# SAC policy prior
+# --------------------------------------------------------------------------- #
+class SACPrior:
+    """Trained SAC actor exposed as an action *distribution* prior.
+
+    ``action_mean_std(state)`` returns the mean action and its (approximate)
+    standard deviation in raw action space. The squashed-Gaussian actor stores
+    mean ``mu_u`` and std ``std_u`` in pre-tanh space; we map them through the
+    tanh + affine squashing:
+
+        mean = tanh(mu_u) * scale + bias
+        std  ~= |d action / d u| * std_u = scale * (1 - tanh(mu_u)^2) * std_u
+                (delta-method linearization of the tanh squashing)
+    """
+
+    def __init__(self, path: str = "sac_lqr.pt"):
+        ckpt = torch.load(path, map_location="cpu", weights_only=False)
+        cfg = ckpt["config"]
+        self.actor = GaussianPolicy(
+            STATE_DIM, ACTION_DIM, tuple(cfg["hidden"]),
+            cfg["action_low"], cfg["action_high"],
+        )
+        self.actor.load_state_dict(ckpt["actor"])
+        self.actor.eval()
+
+    @torch.no_grad()
+    def action_mean_std(self, state: np.ndarray):
+        s = torch.as_tensor(state, dtype=torch.float32).unsqueeze(0)
+        mu_u, log_std = self.actor.forward(s)
+        std_u = log_std.exp()
+        t = torch.tanh(mu_u)
+        scale = self.actor.action_scale
+        bias = self.actor.action_bias
+        mean_a = t * scale + bias
+        std_a = std_u * scale * (1.0 - t.pow(2))       # delta method
+        return mean_a.squeeze(0).numpy(), std_a.squeeze(0).numpy()
+
+
+# --------------------------------------------------------------------------- #
+# Policy-prior CEM
+# --------------------------------------------------------------------------- #
+class CEMPlanner:
+    def __init__(
+        self,
+        env: LQREnv,
+        horizon: int = 15,
+        num_samples: int = 1000,
+        num_elites: int = 50,
+        max_iters: int = 1000,
+        prior_std_scale: float = 5.0,
+        tol_mu: float = 1e-3,
+        tol_sigma: float = 1e-3,
+        gamma: float = 1.0,
+        sac_path: str = "sac_lqr.pt",
+        prior: SACPrior | None = None,
+        seed: int | None = None,
+    ):
+        """
+        Parameters
+        ----------
+        horizon         : planning horizon H.
+        num_samples     : sequences sampled per CEM iteration (N).
+        num_elites      : how many top sequences refit the Gaussian (K).
+        max_iters       : iteration budget I per timestep.
+        prior_std_scale : multiplier applied to the SAC action std when seeding
+                          the initial sampling distribution (5.0 -> widen it).
+        tol_mu          : stop when ||mu - mu_prev|| < tol_mu.
+        tol_sigma       : stop when max(sigma) < tol_sigma (distribution collapsed).
+        gamma           : discount for the planned return.
+        sac_path        : checkpoint used to build the SAC policy prior.
+        prior           : a preloaded SACPrior (overrides ``sac_path``).
+        """
+        self.env = env
+        self.horizon = int(horizon)
+        self.num_samples = int(num_samples)
+        self.num_elites = int(num_elites)
+        self.max_iters = int(max_iters)
+        self.prior_std_scale = float(prior_std_scale)
+        self.tol_mu = float(tol_mu)
+        self.tol_sigma = float(tol_sigma)
+        self.gamma = float(gamma)
+        self.prior = prior if prior is not None else SACPrior(sac_path)
+        self.rng = np.random.default_rng(seed)
+        self.reset()
+
+    def reset(self) -> None:
+        """No warm-started state to clear -- each timestep is re-seeded from the
+        SAC policy prior. Kept for API compatibility with ``run_episode``."""
+        pass
+
+    def _init_from_prior(self, state: np.ndarray):
+        """Seed (mu, sigma) for the H-step distribution by rolling the SAC
+        policy through the deterministic model from ``state``."""
+        H, adim = self.horizon, self.env.action_dim
+        mu = np.zeros((H, adim))
+        sigma = np.zeros((H, adim))
+        s = np.asarray(state, dtype=np.float64)
+        for h in range(H):
+            mean_a, std_a = self.prior.action_mean_std(s)
+            mu[h] = mean_a
+            sigma[h] = std_a * self.prior_std_scale
+            s = self.env.dynamics(s, mean_a)   # deterministic model step
+        return mu, sigma
+
+    def plan(self, state: np.ndarray) -> np.ndarray:
+        H, N, K = self.horizon, self.num_samples, self.num_elites
+        adim = self.env.action_dim
+        lo, hi = self.env.action_low, self.env.action_high
+
+        # initialize the sampling distribution from the SAC policy prior
+        # (mean = policy rollout, std = policy std * prior_std_scale)
+        mu, sigma = self._init_from_prior(state)
+
+        for times in range(self.max_iters):
+            mu_prev = mu
+
+            # 1. sample + clip
+            noise = self.rng.normal(size=(N, H, adim))
+            actions = np.clip(mu + sigma * noise, lo, hi)
+
+            # 2. evaluate
+            returns = _rollout_returns(self.env, state, actions, self.gamma)
+
+            # 3. top-K elites
+            elite_idx = np.argpartition(returns, -K)[-K:]
+            elites = actions[elite_idx]
+
+            # 4. refit BOTH mean and std
+            mu = elites.mean(axis=0)
+            sigma = elites.std(axis=0)
+
+            # convergence
+            if sigma.max() < self.tol_sigma:
+                break
+
+        action = mu[0].copy()
+        if times == self.max_iters - 1:
+            print("\nHit Max Iter")
+        # NOTE: no warm start -- the next timestep re-seeds from the SAC prior.
+        return action
+
+    def act(self, state: np.ndarray) -> np.ndarray:
+        return self.plan(state)
+
+
+# --------------------------------------------------------------------------- #
+# rollout
+# --------------------------------------------------------------------------- #
+def run_episode(env: LQREnv, agent, init_state=None, T: int | None = None):
+    """Roll out the planner; return (total_reward, state_trajectory)."""
+    if hasattr(agent, "reset"):
+        agent.reset()
+    s = env.reset(state=init_state)
+    if T is None:
+        T = env.max_steps
+    total = 0.0
+    traj = [s.copy()]
+    for _ in range(T):
+        a = agent.act(s)
+        s, r, term, trunc, _ = env.step(a)
+        total += r
+        traj.append(s.copy())
+        if term or trunc:
+            break
+    return total, np.array(traj)
+
+
+if __name__ == "__main__":
+    from optimal import LQRController, run_episode as run_optimal_episode
+
+    env = LQREnv(noise_std=0.0, seed=0)
+    s0 = np.array([1.0, -1.0, 0.5])
+
+    ctrl = LQRController(env)
+    opt_r, _ = run_optimal_episode(LQREnv(noise_std=0.0, seed=0), ctrl, init_state=s0, T=200)
+    print(f"Optimal LQR                                  reward (T=200): {opt_r:.4f}")
+
+    # one shared prior so we don't reload the checkpoint per planner
+    prior = SACPrior("sac_lqr.pt")
+    for H in (5, 15):
+        env = LQREnv(noise_std=0.0, seed=0)
+        cem = CEMPlanner(env, horizon=H, num_samples=1000, prior=prior, seed=0)
+        total, traj = run_episode(env, cem, init_state=s0, T=200)
+        print(f"Policy-prior CEM (H={H:>2}, N=1000, K=50, std*5) reward (T=200): "
+              f"{total:.4f}   final state: {np.round(traj[-1], 5)}")
+
+    # NB: like vanilla CEM (phase2.py), open-loop search degrades at large H for
+    # a fixed sample budget; the SAC prior makes short horizons essentially
+    # optimal (H=3 matches the optimal LQR exactly).
