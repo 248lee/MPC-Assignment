@@ -42,7 +42,8 @@ from lqr_env import LQREnv
 from optimal import LQRController, run_episode as run_optimal_episode
 from phase1 import RandomShootingMPC, run_episode as run_mpc_episode
 from phase2 import CEMPlanner, MPPIPlanner, run_episode as run_plan_episode
-from policy_prior import CEMPlanner as PolicyPriorCEM, SACPrior
+from policy_prior_CEM import CEMPlanner as PolicyPriorCEM, SACPrior
+from policy_prior_random_shooting import RandomShootingPlanner as PolicyPriorRS
 from sac_lqr import GaussianPolicy, STATE_DIM, ACTION_DIM
 
 
@@ -140,8 +141,10 @@ def run_sweep():
         print(f"[Policy-prior CEM]  {SAC_MODEL_FILE} not found -> column will be NaN.")
 
     # ---- 2) planners over horizons -------------------------------------- #
-    mpc_rewards, cem_rewards, mppi_rewards, pp_rewards = [], [], [], []
-    print(f"{'H':>3} | {'MPC reward':>14} | {'CEM reward':>14} | {'PolPrior reward':>16}")
+    mpc_rewards, cem_rewards, mppi_rewards = [], [], []
+    pp_rewards, ppc_rewards, pprs_rewards = [], [], []   # pp=large-explore, ppc=conservative
+    print(f"{'H':>3} | {'MPC reward':>14} | {'CEM reward':>14} | {'PP-large reward':>16} "
+          f"| {'PP-consv reward':>16} | {'PP-RandShoot':>14}")
     print("-" * 70)
     for H in HORIZONS:
         env = make_env()
@@ -165,7 +168,10 @@ def run_sweep():
         # r_mppi, _ = run_plan_episode(env, mppi, init_state=INIT_STATE, T=T)
 
         # policy-prior CEM: same CEM refinement, but seeded from the SAC policy
-        # (std * PP_STD_SCALE) instead of warm-starting the shifted plan.
+        # instead of warm-starting the shifted plan. Two flavours:
+        #   * large-explore : widen the SAC std by PP_STD_SCALE (aggressive search)
+        #   * conservative  : shrink the SAC std by 1/(2H), matching the random
+        #                     shooter -- a tight, horizon-adaptive proposal.
         if prior is not None:
             env = make_env()
             pp = PolicyPriorCEM(
@@ -174,15 +180,39 @@ def run_sweep():
                 seed=SEED,
             )
             r_pp, _ = run_plan_episode(env, pp, init_state=INIT_STATE, T=T)
+
+            # conservative prior CEM: sigma = SAC std / (2H), i.e. the same
+            # horizon-adaptive proposal used by policy_prior_random_shooting.py,
+            # expressed here via the prior_std_scale multiplier.
+            env = make_env()
+            ppc = PolicyPriorCEM(
+                env, horizon=H, num_samples=NUM_SAMPLES, num_elites=NUM_ELITES,
+                max_iters=CEM_ITERS, prior_std_scale=1.0 / (2.0 * H), prior=prior,
+                seed=SEED,
+            )
+            r_ppc, _ = run_plan_episode(env, ppc, init_state=INIT_STATE, T=T)
+
+            # policy-prior random shooting: one-shot best-of-N sampled from the
+            # SAC prior (raw std, no widening), no CEM refinement.
+            env = make_env()
+            pprs = PolicyPriorRS(
+                env, horizon=H, num_samples=NUM_SAMPLES * 100, prior=prior, seed=SEED,
+            )
+            r_pprs, _ = run_plan_episode(env, pprs, init_state=INIT_STATE, T=T)
         else:
             r_pp = np.nan
+            r_ppc = np.nan
+            r_pprs = np.nan
 
         mpc_rewards.append(r_mpc)
         cem_rewards.append(r_cem)
         # mppi_rewards.append(r_mppi)
         pp_rewards.append(r_pp)
+        ppc_rewards.append(r_ppc)
+        pprs_rewards.append(r_pprs)
         # print(f"{H:>3} | {r_mpc:>14.3f} | {r_cem:>14.3f} | {r_mppi:>14.3f}")
-        print(f"{H:>3} | {r_mpc:>14.3f} | {r_cem:>14.3f} | {r_pp:>16.3f}")
+        print(f"{H:>3} | {r_mpc:>14.3f} | {r_cem:>14.3f} | {r_pp:>16.3f} "
+              f"| {r_ppc:>16.3f} | {r_pprs:>14.3f}")
 
     results = dict(
         horizons=np.array(HORIZONS),
@@ -191,6 +221,8 @@ def run_sweep():
         cem_rewards=np.array(cem_rewards),
         # mppi_rewards=np.array(mppi_rewards),
         pp_rewards=np.array(pp_rewards),
+        ppc_rewards=np.array(ppc_rewards),
+        pprs_rewards=np.array(pprs_rewards),
         config_sig=CONFIG_SIG,
     )
     np.savez(RESULTS_FILE, **results)
@@ -220,16 +252,25 @@ def main():
     cem_rewards = list(results["cem_rewards"])
     # mppi_rewards = list(results["mppi_rewards"])
     pp_rewards = list(results["pp_rewards"]) if "pp_rewards" in results else None
+    ppc_rewards = list(results["ppc_rewards"]) if "ppc_rewards" in results else None
+    pprs_rewards = list(results["pprs_rewards"]) if "pprs_rewards" in results else None
 
     # ---- 3) plot (cost = -reward, log scale) ---------------------------- #
     opt_cost = -opt_reward
     mpc_cost = [-r for r in mpc_rewards]
     cem_cost = [-r for r in cem_rewards]
     # mppi_cost = [-r for r in mppi_rewards]
-    # policy-prior CEM curve (may be all-NaN if the SAC model was unavailable)
+    # policy-prior CEM curves (may be all-NaN if the SAC model was unavailable)
     pp_cost = None
     if pp_rewards is not None and not np.all(np.isnan(pp_rewards)):
         pp_cost = [-r for r in pp_rewards]
+    ppc_cost = None
+    if ppc_rewards is not None and not np.all(np.isnan(ppc_rewards)):
+        ppc_cost = [-r for r in ppc_rewards]
+    # policy-prior random-shooting curve (same NaN guard)
+    pprs_cost = None
+    if pprs_rewards is not None and not np.all(np.isnan(pprs_rewards)):
+        pprs_cost = [-r for r in pprs_rewards]
 
     # trained SAC policy: same env / init state / horizon as the optimal run,
     # so it appears as a horizontal dashed line (reactive policy, no planning H).
@@ -260,7 +301,13 @@ def main():
         # plt.plot(hs, [mppi_cost[i] for i in idx], "^-", color="tab:orange", label="MPPI")
         if pp_cost is not None:
             plt.plot(hs, [pp_cost[i] for i in idx], "d-", color="tab:purple",
-                     label="Policy-prior CEM (SAC)")
+                     label="Large-explore prior CEM (SAC)")
+        if ppc_cost is not None:
+            plt.plot(hs, [ppc_cost[i] for i in idx], "P-", color="tab:olive",
+                     label="Conservative prior CEM (SAC)")
+        if pprs_cost is not None:
+            plt.plot(hs, [pprs_cost[i] for i in idx], "v-", color="tab:brown",
+                     label="Policy-prior random shooting (SAC)")
         plt.yscale("log")
         plt.xlabel("Planning horizon H")
         plt.ylabel(f"Episode cost  = -reward  (T={T}, log scale)")
@@ -282,6 +329,7 @@ def main():
         hs = [HORIZONS[i] for i in idx]
         cem = [cem_cost[i] for i in idx]
         pp = [pp_cost[i] for i in idx] if pp_cost is not None else None
+        ppc = [ppc_cost[i] for i in idx] if ppc_cost is not None else None
 
         fig, (ax_hi, ax_lo) = plt.subplots(
             2, 1, sharex=True, figsize=(9, 6),
@@ -297,7 +345,10 @@ def main():
             ax.plot(hs, cem, "s-", color="tab:green", label="CEM")
             if pp is not None:
                 ax.plot(hs, pp, "d-", color="tab:purple",
-                        label="Policy-prior CEM (SAC)")
+                        label="Large-explore prior CEM (SAC)")
+            if ppc is not None:
+                ax.plot(hs, ppc, "P-", color="tab:olive",
+                        label="Conservative prior CEM (SAC)")
             ax.grid(True, alpha=0.3)
 
         # mark CEM's lowest-cost (best) horizon with a star
@@ -350,8 +401,16 @@ def main():
     # print(f"Best MPPI                : H={best_H_mppi:<3} reward {max(mppi_rewards):10.3f}")
     if pp_cost is not None:
         best_H_pp = HORIZONS[int(np.nanargmax(pp_rewards))]
-        print(f"Best Policy-prior CEM    : H={best_H_pp:<3} reward "
+        print(f"Best Large-explore prior CEM : H={best_H_pp:<3} reward "
               f"{np.nanmax(pp_rewards):10.3f}")
+    if ppc_cost is not None:
+        best_H_ppc = HORIZONS[int(np.nanargmax(ppc_rewards))]
+        print(f"Best Conservative prior CEM  : H={best_H_ppc:<3} reward "
+              f"{np.nanmax(ppc_rewards):10.3f}")
+    if pprs_cost is not None:
+        best_H_pprs = HORIZONS[int(np.nanargmax(pprs_rewards))]
+        print(f"Best Policy-prior RandShoot: H={best_H_pprs:<3} reward "
+              f"{np.nanmax(pprs_rewards):10.3f}")
     print(f"\nH=1  random-shooting MPC : {mpc_rewards[0]:.3e}  (diverges -- short-horizon failure)")
     print("=> Refining the sampling distribution (CEM / MPPI) keeps planning close")
     print("   to optimal across horizons instead of degrading for large H.")
