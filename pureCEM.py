@@ -6,7 +6,7 @@ class PureCEM:
     """Cross-Entropy Method optimizer for custom objective function."""
 
     def __init__(self, H, adim, num_samples=100, num_elites=20,
-                 max_iters=100, sigma_init=1.0, tol_mu=1e-3, tol_sigma=1e-3,
+                 max_iters=100, sigma_init=2.0, tol_mu=1e-3, tol_sigma=1e-3,
                  seed=None):
         """
         Args:
@@ -31,7 +31,7 @@ class PureCEM:
         self.rng = np.random.RandomState(seed)
 
         # Initialize distribution (centered at origin)
-        self.mu = np.zeros((H, adim)) + 0.1
+        self.mu = np.zeros((H, adim))
         self.sigma = np.full((H, adim), sigma_init)
 
     def objective(self, x):
@@ -194,8 +194,8 @@ if __name__ == "__main__":
 
     optimizer = PureCEM(
         H=H, adim=adim,
-        num_samples=100, num_elites=20,
-        max_iters=100, sigma_init=1.0,
+        num_samples=100, num_elites=5,
+        max_iters=1000, sigma_init=0.1,
         seed=42
     )
 
