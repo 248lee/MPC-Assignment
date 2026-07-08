@@ -1,0 +1,41 @@
+[shard 1] job 1/20: mpc H=2 N=707
+[shard 1] done mpc H=2 N=707: reward=-18.9837 (0s, total 0s)
+[shard 1] job 2/20: mpc H=4 N=1414
+[shard 1] done mpc H=4 N=1414: reward=-89.7472 (0s, total 0s)
+[shard 1] job 3/20: ppc H=2 N=707
+[shard 1] done ppc H=2 N=707: reward=-2.46692 (1s, total 1s)
+[shard 1] job 4/20: pprs H=1 N=50000
+[shard 1] done pprs H=1 N=50000: reward=-15.8518 (1s, total 2s)
+[shard 1] job 5/20: cem H=3 N=1000
+[shard 1] done cem H=3 N=1000: reward=-2.48668 (1s, total 3s)
+[shard 1] job 6/20: pp H=4 N=1414
+[shard 1] done pp H=4 N=1414: reward=-2.46629 (4s, total 7s)
+[shard 1] job 7/20: mpc H=11 N=16000
+[shard 1] done mpc H=11 N=16000: reward=-302.1 (4s, total 11s)
+[shard 1] job 8/20: mpc H=13 N=32000
+[shard 1] done mpc H=13 N=32000: reward=-315.119 (8s, total 19s)
+[shard 1] job 9/20: cem H=6 N=2828
+[shard 1] done cem H=6 N=2828: reward=-2.49224 (6s, total 25s)
+[shard 1] job 10/20: mpc H=14 N=45255
+[shard 1] done mpc H=14 N=45255: reward=-337.596 (13s, total 39s)
+[shard 1] job 11/20: mpc H=15 N=64000
+[shard 1] done mpc H=15 N=64000: reward=-371.671 (22s, total 61s)
+[shard 1] job 12/20: cem H=9 N=8000
+[shard 1] done cem H=9 N=8000: reward=-2.50976 (49s, total 109s)
+[shard 1] job 13/20: ppc H=9 N=8000
+[shard 1] done ppc H=9 N=8000: reward=-2.49827 (31s, total 140s)
+[shard 1] job 14/20: ppc H=11 N=16000
+[shard 1] done ppc H=11 N=16000: reward=-2.50711 (85s, total 225s)
+[shard 1] job 15/20: pprs H=9 N=800000
+[shard 1] done pprs H=9 N=800000: reward=-2.62624 (247s, total 472s)
+[shard 1] job 16/20: cem H=12 N=22627
+[shard 1] done cem H=12 N=22627: reward=-2.51382 (216s, total 688s)
+[shard 1] job 17/20: ppc H=14 N=45255
+[shard 1] done ppc H=14 N=45255: reward=-2.52424 (473s, total 1161s)
+[shard 1] job 18/20: cem H=15 N=64000
+[shard 1] done cem H=15 N=64000: reward=-2.54239 (1140s, total 2301s)
+[shard 1] job 19/20: ppc H=15 N=64000
+[shard 1] done ppc H=15 N=64000: reward=-2.53032 (697s, total 2998s)
+[shard 1] job 20/20: pprs H=15 N=6400000
+[shard 1] done pprs H=15 N=6400000: reward=-2.76626 (3181s, total 6178s)
+[shard 1] ALL DONE in 6178s -> compare_expN_shard1.npz

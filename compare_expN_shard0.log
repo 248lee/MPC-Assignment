@@ -1,0 +1,49 @@
+[shard 0] job 1/19: mpc H=3 N=1000
+[shard 0] done mpc H=3 N=1000: reward=-50.1178 (0s, total 0s)
+[shard 0] job 2/19: pp H=1 N=500
+
+Hit Max Iter
+
+Hit Max Iter
+
+Hit Max Iter
+
+Hit Max Iter
+
+Hit Max Iter
+[shard 0] done pp H=1 N=500: reward=-2509.85 (1s, total 1s)
+[shard 0] job 3/19: mpc H=6 N=2828
+[shard 0] done mpc H=6 N=2828: reward=-161.984 (0s, total 1s)
+[shard 0] job 4/19: cem H=2 N=707
+[shard 0] done cem H=2 N=707: reward=-2.48646 (0s, total 2s)
+[shard 0] job 5/19: mpc H=9 N=8000
+[shard 0] done mpc H=9 N=8000: reward=-246.335 (2s, total 3s)
+[shard 0] job 6/19: ppc H=4 N=1414
+[shard 0] done ppc H=4 N=1414: reward=-2.47673 (3s, total 6s)
+[shard 0] job 7/19: cem H=5 N=2000
+[shard 0] done cem H=5 N=2000: reward=-2.49569 (3s, total 9s)
+[shard 0] job 8/19: pprs H=3 N=100000
+[shard 0] done pprs H=3 N=100000: reward=-2.49371 (7s, total 16s)
+[shard 0] job 9/19: pprs H=4 N=141400
+[shard 0] done pprs H=4 N=141400: reward=-2.50553 (13s, total 29s)
+[shard 0] job 10/19: cem H=7 N=4000
+[shard 0] done cem H=7 N=4000: reward=-2.49906 (11s, total 40s)
+[shard 0] job 11/19: pprs H=5 N=200000
+[shard 0] done pprs H=5 N=200000: reward=-2.52547 (25s, total 64s)
+[shard 0] job 12/19: cem H=8 N=5657
+[shard 0] done cem H=8 N=5657: reward=-2.53378 (30s, total 94s)
+[shard 0] job 13/19: pprs H=7 N=400000
+[shard 0] done pprs H=7 N=400000: reward=-2.56986 (90s, total 184s)
+[shard 0] job 14/19: pp H=10 N=11314
+[shard 0] done pp H=10 N=11314: reward=-2.51018 (111s, total 295s)
+[shard 0] job 15/19: pp H=11 N=16000
+[shard 0] done pp H=11 N=16000: reward=-2.52854 (188s, total 483s)
+[shard 0] job 16/19: pp H=12 N=22627
+[shard 0] done pp H=12 N=22627: reward=-2.56114 (354s, total 837s)
+[shard 0] job 17/19: pp H=13 N=32000
+[shard 0] done pp H=13 N=32000: reward=-2.56499 (650s, total 1488s)
+[shard 0] job 18/19: pp H=14 N=45255
+[shard 0] done pp H=14 N=45255: reward=-2.58512 (1164s, total 2652s)
+[shard 0] job 19/19: pprs H=16 N=9051000
+[shard 0] done pprs H=16 N=9051000: reward=-2.78608 (4658s, total 7310s)
+[shard 0] ALL DONE in 7310s -> compare_expN_shard0.npz
