@@ -217,6 +217,12 @@ class SACConfig:
     grad_clip: float = 10.0
     action_low: float = -10.0
     action_high: float = 10.0
+    # state / action dimensions. Default to the LQR sizes so existing LQR
+    # training + checkpoints are unchanged; train_prior.py overrides these to
+    # match the harder envs (e.g. clqr has a 6-D augmented state, switched a
+    # 5-D action = control + mode-logits).
+    state_dim: int = STATE_DIM
+    action_dim: int = ACTION_DIM
 
 
 class SAC:
@@ -225,14 +231,15 @@ class SAC:
         self.device = device
         self.gamma = cfg.gamma
         self.tau = cfg.tau
+        sdim, adim = cfg.state_dim, cfg.action_dim
 
         self.actor = GaussianPolicy(
-            STATE_DIM, ACTION_DIM, cfg.hidden, cfg.action_low, cfg.action_high
+            sdim, adim, cfg.hidden, cfg.action_low, cfg.action_high
         ).to(device)
-        self.q1 = QNetwork(STATE_DIM, ACTION_DIM, cfg.hidden).to(device)
-        self.q2 = QNetwork(STATE_DIM, ACTION_DIM, cfg.hidden).to(device)
-        self.q1_t = QNetwork(STATE_DIM, ACTION_DIM, cfg.hidden).to(device)
-        self.q2_t = QNetwork(STATE_DIM, ACTION_DIM, cfg.hidden).to(device)
+        self.q1 = QNetwork(sdim, adim, cfg.hidden).to(device)
+        self.q2 = QNetwork(sdim, adim, cfg.hidden).to(device)
+        self.q1_t = QNetwork(sdim, adim, cfg.hidden).to(device)
+        self.q2_t = QNetwork(sdim, adim, cfg.hidden).to(device)
         self.q1_t.load_state_dict(self.q1.state_dict())
         self.q2_t.load_state_dict(self.q2.state_dict())
         for p in self.q1_t.parameters():

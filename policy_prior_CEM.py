@@ -106,8 +106,13 @@ class SACPrior:
     def __init__(self, path: str = "sac_lqr.pt"):
         ckpt = torch.load(path, map_location="cpu", weights_only=False)
         cfg = ckpt["config"]
+        # dims come from the checkpoint when present (priors trained on the
+        # harder envs via train_prior.py); fall back to the LQR sizes for older
+        # checkpoints that predate the dimension-aware config.
+        sdim = cfg.get("state_dim", STATE_DIM)
+        adim = cfg.get("action_dim", ACTION_DIM)
         self.actor = GaussianPolicy(
-            STATE_DIM, ACTION_DIM, tuple(cfg["hidden"]),
+            sdim, adim, tuple(cfg["hidden"]),
             cfg["action_low"], cfg["action_high"],
         )
         self.actor.load_state_dict(ckpt["actor"])
