@@ -43,7 +43,7 @@ class IGOPlanner:
         horizon: int = 15,
         num_samples: int = 1000,
         num_elites: int = 50,
-        max_iters: int = 1000,
+        max_iters: int = 1e10,
         sigma_init: float = 0.2,
         dt: float = 0.5,
         tol_mu: float = 1e-3,
@@ -122,7 +122,7 @@ class IGOPlanner:
 
         action = mu[0].copy()
         if times == self.max_iters - 1:
-            print("\nHit Max Iter")
+            print("\npure IGO Hit Max Iter")
         # warm start: shift the plan forward by one step
         self.mu = np.vstack([mu[1:], np.zeros((1, adim))])
         return action

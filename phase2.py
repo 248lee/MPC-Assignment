@@ -121,7 +121,7 @@ class CEMPlanner:
 
         action = mu[0].copy()
         if times == self.max_iters - 1:
-            print("\nHit Max Iter")
+            print("\nCEM Hit Max Iter")
         # warm start: shift the plan forward by one step
         self.mu = np.vstack([mu[1:], np.zeros((1, adim))])
         return action
