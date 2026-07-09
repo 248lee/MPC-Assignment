@@ -1,0 +1,51 @@
+PS C:\Users\JohnLee\Desktop\MPC-Assignment> uv run python train_prior.py --env all
+=== training prior on env 'clqr' (Constrained LQR (sat + rate)) ===
+state_dim=6 action_dim=3 action_bounds=[-0.3, 0.3] T_trunc=30 behavior=MPPI(H=5, N=256, explore=0.5)
+--------------------------------------------------------------------
+ep     1 | buf      30 | critic_dQ   n/a  | streak   0 | eval SAC -266785.17  MPPI  -18161.72 |    75s
+ep    25 | buf     750 | critic_dQ 8.56e-01 | streak   0 | eval SAC -219378.33  MPPI  -18161.72 |   321s
+ep    50 | buf    1500 | critic_dQ 1.68e-01 | streak   0 | eval SAC -317082.77  MPPI  -18161.72 |   612s
+ep    75 | buf    2250 | critic_dQ 7.69e-02 | streak   0 | eval SAC -139845.28  MPPI  -18161.72 |   850s
+ep   100 | buf    3000 | critic_dQ 6.83e-02 | streak   0 | eval SAC -492490.28  MPPI  -18161.72 |  1079s
+ep   125 | buf    3750 | critic_dQ 8.85e-02 | streak   0 | eval SAC -497403.60  MPPI  -18161.72 |  1374s
+ep   150 | buf    4500 | critic_dQ 5.06e-02 | streak   0 | eval SAC -1161653.35  MPPI  -18161.72 |  1605s
+ep   175 | buf    5250 | critic_dQ 3.34e-02 | streak   0 | eval SAC -319501.75  MPPI  -18161.72 |  1834s
+ep   200 | buf    6000 | critic_dQ 2.74e-02 | streak   0 | eval SAC -177992.77  MPPI  -18161.72 |  2062s
+--------------------------------------------------------------------
+Stopped (max_episodes) after 200 episodes.
+Final eval  SAC -268026.39  vs  MPPI -18987.05  (gap -249039.34)
+Saved SAC prior -> C:\Users\JohnLee\Desktop\MPC-Assignment\sac_clqr.pt
+
+=== training prior on env 'switched' (Switched linear) ===
+state_dim=3 action_dim=5 action_bounds=[-10.0, 10.0] T_trunc=30 behavior=MPPI(H=5, N=256, explore=0.5)
+--------------------------------------------------------------------
+ep     1 | buf      30 | critic_dQ   n/a  | streak   0 | eval SAC -6044748.97  MPPI     -18.51 |    97s
+ep    25 | buf     750 | critic_dQ 9.19e-01 | streak   0 | eval SAC -59167793.20  MPPI     -18.51 |   399s
+ep    50 | buf    1500 | critic_dQ 2.62e-01 | streak   0 | eval SAC  -91446.52  MPPI     -18.51 |   720s
+ep    75 | buf    2250 | critic_dQ 8.22e-02 | streak   0 | eval SAC  -91446.52  MPPI     -18.51 |  1047s
+ep   100 | buf    3000 | critic_dQ 4.63e-02 | streak   0 | eval SAC  -91446.52  MPPI     -18.51 |  1565s
+ep   125 | buf    3750 | critic_dQ 3.30e-02 | streak   0 | eval SAC  -91446.52  MPPI     -18.51 |  2088s
+ep   150 | buf    4500 | critic_dQ 2.59e-02 | streak   0 | eval SAC  -91446.52  MPPI     -18.51 |  2613s
+ep   175 | buf    5250 | critic_dQ 2.13e-02 | streak   0 | eval SAC  -91446.52  MPPI     -18.51 |  3136s
+ep   200 | buf    6000 | critic_dQ 1.81e-02 | streak   0 | eval SAC  -91446.52  MPPI     -18.51 |  3466s
+--------------------------------------------------------------------
+Stopped (max_episodes) after 200 episodes.
+Final eval  SAC -91103.18  vs  MPPI -18.21  (gap -91084.96)
+Saved SAC prior -> C:\Users\JohnLee\Desktop\MPC-Assignment\sac_switched.pt
+
+=== training prior on env 'terminal' (Linear + Huber terminal) ===
+state_dim=3 action_dim=3 action_bounds=[-10.0, 10.0] T_trunc=30 behavior=MPPI(H=5, N=256, explore=0.5)
+--------------------------------------------------------------------
+ep     1 | buf      30 | critic_dQ   n/a  | streak   0 | eval SAC -7531574.59  MPPI     -33.78 |    49s
+ep    25 | buf     750 | critic_dQ 1.98e-01 | streak   0 | eval SAC -9874690.99  MPPI     -33.78 |   203s
+ep    50 | buf    1500 | critic_dQ 5.01e-02 | streak   0 | eval SAC -18064633.37  MPPI     -33.78 |   371s
+ep    75 | buf    2250 | critic_dQ 2.75e-01 | streak   0 | eval SAC -59175663.69  MPPI     -33.78 |   545s
+ep   100 | buf    3000 | critic_dQ 8.01e-02 | streak   0 | eval SAC -59175674.61  MPPI     -33.78 |   722s
+ep   125 | buf    3750 | critic_dQ 4.46e-02 | streak   0 | eval SAC -59175675.03  MPPI     -33.78 |   892s
+ep   150 | buf    4500 | critic_dQ 3.18e-02 | streak   0 | eval SAC -24219284.44  MPPI     -33.78 |  1063s
+ep   175 | buf    5250 | critic_dQ 2.50e-02 | streak   0 | eval SAC -24219284.44  MPPI     -33.78 |  1287s
+ep   200 | buf    6000 | critic_dQ 2.08e-02 | streak   0 | eval SAC -24219284.44  MPPI     -33.78 |  1557s
+--------------------------------------------------------------------
+Stopped (max_episodes) after 200 episodes.
+Final eval  SAC -24005772.28  vs  MPPI -33.55  (gap -24005738.73)
+Saved SAC prior -> C:\Users\JohnLee\Desktop\MPC-Assignment\sac_terminal.pt

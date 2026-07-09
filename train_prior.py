@@ -159,7 +159,6 @@ def train_env(
             done = 1.0 if term else 0.0
             buffer.add(s, a, r, s2, done)
             s = s2
-            print(f"This is episode {ep} at timestep {t}")
             if term or trunc:
                 break
 

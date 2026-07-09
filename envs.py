@@ -146,7 +146,6 @@ class ConstrainedLQREnv:
         return self.state.copy()
 
     def step(self, action):
-        print("Shout out to CLQR")
         du = np.clip(np.asarray(action, np.float64), self.action_low, self.action_high)
         r = self.reward(self.state, du)
         ns = self.dynamics(self.state, du, noise=self.noise_std > 0.0)
@@ -259,7 +258,6 @@ class SwitchedLinearEnv:
         return self.state.copy()
 
     def step(self, action):
-        print("switched")
         a = np.clip(np.asarray(action, np.float64), self.action_low, self.action_high)
         r = self.reward(self.state, a)
         ns = self.dynamics(self.state, a, noise=self.noise_std > 0.0)
@@ -393,7 +391,6 @@ class NonQuadraticTerminalLQREnv:
         return self.state.copy()
 
     def step(self, action):
-        print("terminal")
         a = np.clip(np.asarray(action, np.float64), self.action_low, self.action_high)
         r = self.reward(self.state, a)                       # stage cost
         xn = self.A @ self.state + self.B @ a
