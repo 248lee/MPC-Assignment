@@ -159,6 +159,7 @@ class IGOPlanner:
         sac_path: str = "sac_lqr.pt",
         prior: SACPrior | None = None,
         seed: int | None = None,
+        detect_premature: bool = False,
     ):
         """
         Parameters
@@ -194,6 +195,8 @@ class IGOPlanner:
         self.gamma = float(gamma)
         self.prior = prior if prior is not None else SACPrior(sac_path)
         self.rng = np.random.default_rng(seed)
+        self.detect_premature = detect_premature
+        self.last_premature_convergence: bool = False
         # closed-form finite-horizon LQR cost matrix for the H-step subproblem;
         # state-independent, so compute it once and reuse every timestep.
         self._P0 = _finite_horizon_P0(self.env, self.horizon, self.gamma)
@@ -203,6 +206,22 @@ class IGOPlanner:
         """No warm-started state to clear -- each timestep is re-seeded from the
         SAC policy prior. Kept for API compatibility with ``run_episode``."""
         pass
+
+    def _check_premature(self, state: np.ndarray, mu: np.ndarray, sigma: np.ndarray) -> bool:
+        lo, hi = self.env.action_low, self.env.action_high
+        mu_return = _rollout_returns(self.env, state, mu[None], self.gamma)[0]
+        H, adim = mu.shape
+        for h in range(H):
+            for d in range(adim):
+                for sign in (1.0, -1.0):
+                    mu_test = mu.copy()
+                    mu_test[h, d] += sign * 10.0 * sigma[h, d]
+                    test_return = _rollout_returns(
+                        self.env, state, np.clip(mu_test, lo, hi)[None], self.gamma
+                    )[0]
+                    if test_return > mu_return:
+                        return True
+        return False
 
     def _init_from_prior(self, state: np.ndarray):
         """Seed (mu, sigma) for the H-step distribution by rolling the SAC
@@ -286,6 +305,8 @@ class IGOPlanner:
             prev_mu, prev_mu_return = mu.copy(), mu_return
 
         action = mu[0].copy()
+        if self.detect_premature:
+            self.last_premature_convergence = self._check_premature(state, mu, sigma)
         if times == self.max_iters - 1:
             print("\nSACIGO Hit Max Iter")
         # NOTE: no warm start -- the next timestep re-seeds from the SAC prior.

@@ -30,6 +30,7 @@ Key takeaways the figure demonstrates
 
 from __future__ import annotations
 
+import csv
 import os
 
 import numpy as np
@@ -238,6 +239,89 @@ def load_or_run():
     return run_sweep()
 
 
+def run_episode_premature(env, agent, init_state=None, T=None):
+    """Like run_plan_episode but collects per-step premature-convergence flags."""
+    if hasattr(agent, "reset"):
+        agent.reset()
+    s = env.reset(state=init_state)
+    if T is None:
+        T = env.max_steps
+    total = 0.0
+    traj = [s.copy()]
+    premature_flags = []
+    for _ in range(T):
+        a = agent.act(s)
+        premature_flags.append(bool(getattr(agent, "last_premature_convergence", False)))
+        s, r, term, trunc, _ = env.step(a)
+        total += r
+        traj.append(s.copy())
+        if term or trunc:
+            break
+    return total, np.array(traj), premature_flags
+
+
+def run_premature_sweep():
+    """Run the three IGO planners with premature-convergence detection, save premature_check.csv.
+
+    For each horizon H and each of (IGO-ML, large-explore prior IGO, conservative prior IGO),
+    rolls out a full T-step episode and records per-timestep whether premature convergence was
+    detected: a True entry means some ±10σ perturbation of a single mu entry outperforms the
+    converged plan, indicating the planner stopped before reaching a local optimum.
+    """
+    print("=" * 70)
+    print("Running premature convergence check (3 planners × 20 horizons × T steps)...")
+    print("=" * 70)
+    prior = SACPrior(SAC_MODEL_FILE) if os.path.exists(SAC_MODEL_FILE) else None
+    if prior is None:
+        print(f"[Warning] {SAC_MODEL_FILE} not found; pp-large and pp-consv will be skipped.")
+
+    rows = []
+    for H in HORIZONS:
+        env = make_env()
+        igo = IGOPlanner(
+            env, horizon=H, num_samples=NUM_SAMPLES, num_elites=NUM_ELITES,
+            max_iters=IGO_ITERS, sigma_init=REFINE_SIGMA, dt=DT, seed=SEED,
+            detect_premature=True,
+        )
+        _, _, igo_flags = run_episode_premature(env, igo, init_state=INIT_STATE, T=T)
+        for t, f in enumerate(igo_flags):
+            rows.append(("igo", H, t, f))
+
+        pp_summary = ppc_summary = "N/A (no SAC model)"
+        if prior is not None:
+            env = make_env()
+            pp = PolicyPriorIGO(
+                env, horizon=H, num_samples=NUM_SAMPLES, num_elites=NUM_ELITES,
+                max_iters=IGO_ITERS, prior_std_scale=PP_STD_SCALE, dt=DT,
+                prior=prior, seed=SEED, detect_premature=True,
+            )
+            _, _, pp_flags = run_episode_premature(env, pp, init_state=INIT_STATE, T=T)
+            for t, f in enumerate(pp_flags):
+                rows.append(("pp-large", H, t, f))
+            pp_summary = f"{sum(pp_flags)}/{len(pp_flags)}"
+
+            env = make_env()
+            ppc = PolicyPriorIGO(
+                env, horizon=H, num_samples=NUM_SAMPLES, num_elites=NUM_ELITES,
+                max_iters=IGO_ITERS, prior_std_scale=1.0 / (2.0 * H), dt=DT,
+                prior=prior, seed=SEED, detect_premature=True,
+            )
+            _, _, ppc_flags = run_episode_premature(env, ppc, init_state=INIT_STATE, T=T)
+            for t, f in enumerate(ppc_flags):
+                rows.append(("pp-consv", H, t, f))
+            ppc_summary = f"{sum(ppc_flags)}/{len(ppc_flags)}"
+
+        n = len(igo_flags)
+        print(f"H={H:>2}: igo={sum(igo_flags)}/{n} premature  "
+              f"pp-large={pp_summary}  pp-consv={ppc_summary}")
+
+    with open("premature_check.csv", "w", newline="") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(["planner", "H", "timestep", "premature"])
+        writer.writerows(rows)
+    print(f"Saved {len(rows)} rows to premature_check.csv")
+
+
 def main():
     results = load_or_run()
     opt_reward = float(results["opt_reward"])
@@ -402,6 +486,7 @@ def main():
     print(f"\nH=1  random-shooting MPC : {mpc_rewards[0]:.3e}  (diverges -- short-horizon failure)")
     print("=> Refining the sampling distribution (IGO-ML) keeps planning close")
     print("   to optimal across horizons instead of degrading for large H.")
+    run_premature_sweep()
 
 
 if __name__ == "__main__":

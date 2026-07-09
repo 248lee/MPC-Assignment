@@ -50,6 +50,7 @@ class IGOPlanner:
         tol_sigma: float = 1e-3,
         gamma: float = 1.0,
         seed: int | None = None,
+        detect_premature: bool = False,
     ):
         """
         Parameters
@@ -76,11 +77,29 @@ class IGOPlanner:
         self.tol_sigma = float(tol_sigma)
         self.gamma = float(gamma)
         self.rng = np.random.default_rng(seed)
+        self.detect_premature = detect_premature
+        self.last_premature_convergence: bool = False
         self.reset()
 
     def reset(self) -> None:
         """Clear the warm-started mean (call between episodes)."""
         self.mu = np.zeros((self.horizon, self.env.action_dim))
+
+    def _check_premature(self, state: np.ndarray, mu: np.ndarray, sigma: np.ndarray) -> bool:
+        lo, hi = self.env.action_low, self.env.action_high
+        mu_return = _rollout_returns(self.env, state, mu[None], self.gamma)[0]
+        H, adim = mu.shape
+        for h in range(H):
+            for d in range(adim):
+                for sign in (1.0, -1.0):
+                    mu_test = mu.copy()
+                    mu_test[h, d] += sign * 10.0 * sigma[h, d]
+                    test_return = _rollout_returns(
+                        self.env, state, np.clip(mu_test, lo, hi)[None], self.gamma
+                    )[0]
+                    if test_return > mu_return:
+                        return True
+        return False
 
     def plan(self, state: np.ndarray) -> np.ndarray:
         H, N, K = self.horizon, self.num_samples, self.num_elites
@@ -121,6 +140,8 @@ class IGOPlanner:
                 break
 
         action = mu[0].copy()
+        if self.detect_premature:
+            self.last_premature_convergence = self._check_premature(state, mu, sigma)
         if times == self.max_iters - 1:
             print("\npure IGO Hit Max Iter")
         # warm start: shift the plan forward by one step
