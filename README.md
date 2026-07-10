@@ -1,3 +1,5 @@
+# 重要事項: Clone 下來後請 checkout 到 branch `IGO` 才會是正確的程式碼!
+
 # IGO-ML：以「軟更新」抵抗過早收斂的 MPC 規劃器
 
 本分支（`IGO`）在原本的 LQR / MPC 作業（CEM、MPPI、Random Shooting）之上，實作並比較了
