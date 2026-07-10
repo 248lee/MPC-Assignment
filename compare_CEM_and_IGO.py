@@ -324,14 +324,13 @@ def main():
 
     # full sweep, and a zoomed version starting at H=5 (the H=1..2 blow-ups
     # dominate the log scale and hide the differences between the planners).
-    make_plot("compare_reward_vs_horizon.png", h_min=min(HORIZONS))
-    make_plot("compare_more_horizon.png", h_min=5)
+    make_plot("compare_CEM_and_IGO_reward_vs_horizon.png", h_min=min(HORIZONS))
+    make_plot("compare_CEM_and_IGO_more_horizon.png", h_min=5)
     # IGO-only, starting at H=1, with a broken y-axis: linear detail below
     # cost=18, log-scaled diverging costs above the squiggle break.
-    make_plot_refine("compare_cem_mppi.png", h_min=1, y_break=18.0)
+    # make_plot_refine("compare_cem_mppi.png", h_min=1, y_break=18.0)
     print("-" * 70)
-    print("Saved plots to compare_reward_vs_horizon.png, compare_more_horizon.png, "
-          "and compare_cem_mppi.png")
+    print("Saved plots to compare_CEM_and_IGO_reward_vs_horizon.png, compare_CEM_and_IGO_more_horizon.png")
 
     # ---- 4) takeaways --------------------------------------------------- #
     best_H = HORIZONS[int(np.argmax(mpc_rewards))]
