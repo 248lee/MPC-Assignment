@@ -146,6 +146,12 @@ def _build_sac(env, horizon, seed, prior, terminal_value):
 
 
 # ---- planners ------------------------------------------------------------- #
+# NB: ``max_iters`` is intentionally NOT passed to any iterative planner below.
+# The CEM-family class defaults are ``int(1e10)`` so planning runs until it
+# converges (via tol_mu / tol_sigma), rather than being capped by a value
+# hard-coded here. Keep it that way -- don't reintroduce a max_iters kwarg.
+# (MPPI is the exception: its fixed scalar sigma never collapses, so its class
+# default keeps a finite 1000-iteration cap -- see phase2.MPPIPlanner.)
 def _build_random_shooting(env, horizon, seed, prior, terminal_value):
     from phase1 import RandomShootingMPC
     return RandomShootingMPC(env, horizon=horizon, num_samples=1000, sigma=1.0, seed=seed)
@@ -154,25 +160,25 @@ def _build_random_shooting(env, horizon, seed, prior, terminal_value):
 def _build_cem(env, horizon, seed, prior, terminal_value):
     from phase2 import CEMPlanner
     return CEMPlanner(env, horizon=horizon, num_samples=1000, num_elites=50,
-                      max_iters=1000, sigma_init=0.2, seed=seed)
+                      sigma_init=0.2, seed=seed)
 
 
 def _build_mppi(env, horizon, seed, prior, terminal_value):
     from phase2 import MPPIPlanner
     return MPPIPlanner(env, horizon=horizon, num_samples=1000, temperature=20.0,
-                       sigma=0.2, max_iters=1000, seed=seed)
+                       sigma=0.2, seed=seed)
 
 
 def _build_pp_large(env, horizon, seed, prior, terminal_value):
     from policy_prior_CEM import CEMPlanner as PPCEM
     return PPCEM(env, horizon=horizon, num_samples=1000, num_elites=50,
-                 max_iters=1000, prior_std_scale=5.0, prior=prior, seed=seed)
+                 prior_std_scale=5.0, prior=prior, seed=seed)
 
 
 def _build_pp_conservative(env, horizon, seed, prior, terminal_value):
     from policy_prior_CEM import CEMPlanner as PPCEM
     return PPCEM(env, horizon=horizon, num_samples=1000, num_elites=50,
-                 max_iters=1000, prior_std_scale=1.0 / (2.0 * horizon), prior=prior, seed=seed)
+                 prior_std_scale=1.0 / (2.0 * horizon), prior=prior, seed=seed)
 
 
 def _build_pp_random_shooting(env, horizon, seed, prior, terminal_value):
@@ -183,14 +189,14 @@ def _build_pp_random_shooting(env, horizon, seed, prior, terminal_value):
 def _build_tdmpc(env, horizon, seed, prior, terminal_value):
     from tdmpc_planning import TDMPCPlanner
     return TDMPCPlanner(env, horizon=horizon, num_samples=512, num_policy_samples=25,
-                        num_elites=64, max_iters=6, sigma_init=2.0, min_sigma=0.1,
+                        num_elites=64, sigma_init=2.0,
                         temperature=20.0, terminal_value=terminal_value, prior=prior, seed=seed)
 
 
 def _build_tdmpc_noprior(env, horizon, seed, prior, terminal_value):
     from tdmpc_planning import TDMPCPlanner
     return TDMPCPlanner(env, horizon=horizon, num_samples=512, num_policy_samples=0,
-                        num_elites=64, max_iters=6, sigma_init=2.0, min_sigma=0.1,
+                        num_elites=64, sigma_init=2.0,
                         temperature=20.0, terminal_value=terminal_value, prior=None, seed=seed)
 
 

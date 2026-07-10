@@ -37,6 +37,30 @@ from runner import evaluate_method, save_result, load_result, is_fresh
 DEFAULT_HORIZONS = list(range(1, 21))
 
 
+def _print_premature_log(results: dict) -> None:
+    """Reproduce the per-episode premature-convergence log from each result
+    dict. Works identically for freshly-computed and cached results, since the
+    counts are stored in the npz (see runner.evaluate_method)."""
+    print("-" * 70)
+    print("Premature convergence per episode (premature / total plannings):")
+    for m, r in results.items():
+        spec = METHOD_REGISTRY[m]
+        prem = np.asarray(r.get("premature_counts", []), dtype=np.int64)
+        plan = np.asarray(r.get("planning_counts", []), dtype=np.int64)
+        # optimal / SAC (and any non-sampling method) never run the convergence
+        # loop, so they log no plannings -> report n/a.
+        if plan.size == 0 or int(plan.sum()) == 0:
+            print(f"  {m:20s} ({spec.label}): n/a (no sampling-based convergence)")
+            continue
+        print(f"  {m:20s} ({spec.label})")
+        if bool(r["horizon_dependent"]):
+            hs = np.asarray(r["horizons"])
+            for i in range(len(hs)):
+                print(f"      H={int(hs[i]):>3}  premature {int(prem[i]):>5}/{int(plan[i]):<5}")
+        else:
+            print(f"      premature {int(prem[0])}/{int(plan[0])} (horizon-independent)")
+
+
 def _get_result(env, method, horizons, seed, allow_run, force):
     """Return a fresh result dict for (env, method), running/caching if needed."""
     if not force:
@@ -116,6 +140,9 @@ def main():
     plt.close()
     print("-" * 70)
     print(f"Saved plot -> {out}")
+
+    # ---- premature-convergence log (reproduced from cache too) ---------- #
+    _print_premature_log(results)
 
     # ---- summary -------------------------------------------------------- #
     for m, r in results.items():

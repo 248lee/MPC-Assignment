@@ -53,7 +53,7 @@ class CEMPlanner:
         horizon: int = 15,
         num_samples: int = 1000,
         num_elites: int = 50,
-        max_iters: int = 1000,
+        max_iters: int = int(1e10),
         sigma_init: float = 0.2,
         tol_mu: float = 1e-3,
         tol_sigma: float = 1e-3,
@@ -87,6 +87,29 @@ class CEMPlanner:
     def reset(self) -> None:
         """Clear the warm-started mean (call between episodes)."""
         self.mu = np.zeros((self.horizon, self.env.action_dim))
+        # premature-convergence bookkeeping (per episode)
+        self.n_plans = 0
+        self.n_premature = 0
+
+    def _check_premature(self, state: np.ndarray, mu: np.ndarray, sigma: np.ndarray) -> bool:
+        """Probe whether the converged plan ``mu`` is only a *premature* optimum:
+        perturb each action coordinate by +/-10 sigma and see if any single such
+        move improves the planned return. If so, the sampler collapsed before
+        reaching a real optimum (the distribution stopped exploring too early)."""
+        lo, hi = self.env.action_low, self.env.action_high
+        mu_return = _rollout_returns(self.env, state, mu[None], self.gamma)[0]
+        H, adim = mu.shape
+        for h in range(H):
+            for d in range(adim):
+                for sign in (1.0, -1.0):
+                    mu_test = mu.copy()
+                    mu_test[h, d] += sign * 10.0 * sigma[h, d]
+                    test_return = _rollout_returns(
+                        self.env, state, np.clip(mu_test, lo, hi)[None], self.gamma
+                    )[0]
+                    if test_return > mu_return:
+                        return True
+        return False
 
     def plan(self, state: np.ndarray) -> np.ndarray:
         H, N, K = self.horizon, self.num_samples, self.num_elites
@@ -96,8 +119,9 @@ class CEMPlanner:
         mu = self.mu                              # warm-started mean
         sigma = np.full((H, adim), self.sigma_init)   # reset exploration
 
+        converged = False
         for times in range(self.max_iters):
-            mu_prev = mu
+            prev_mu = mu
 
             # 1. sample + clip
             noise = self.rng.normal(size=(N, H, adim))
@@ -115,9 +139,15 @@ class CEMPlanner:
             sigma = elites.std(axis=0)
 
             # convergence
-            if np.linalg.norm(mu - mu_prev) < self.tol_mu or sigma.max() < self.tol_sigma:
+            if np.linalg.norm(mu - prev_mu) < self.tol_mu or sigma.max() < self.tol_sigma:
+                converged = True
                 break
             # print(f"\riter {times:4d}  sigma.max={sigma.max():.5f}", end="", flush=True)
+
+        # record whether this planning call converged prematurely
+        self.n_plans += 1
+        if converged and self._check_premature(state, mu, sigma):
+            self.n_premature += 1
 
         action = mu[0].copy()
         if times == self.max_iters - 1:

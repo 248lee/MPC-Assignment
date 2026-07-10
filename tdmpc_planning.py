@@ -32,15 +32,12 @@ implemented here:
      over those elites to update (mu, sigma) -- a hybrid of CEM's hard
      truncation and MPPI's soft averaging.
 
-One more TD-MPC detail is folded in: the refit sigma is floored at a minimum
-``min_sigma`` (their epsilon), instead of being left free to collapse. This is
-a principled fix for exactly the premature-convergence failure mode this repo
-diagnosed empirically in `pureCEM.py` / `Experimental Report2_Policy Prior.md`
-(sigma too large relative to num_samples -> the first update jumps to a bad
-elite region and gets stuck there): flooring sigma guarantees the sampler can
-never fully stop exploring, no matter how bad iteration 1 was. TD-MPC decays
-this floor over *training* episodes; since nothing is trained here (the model
-is known exactly), it is kept as a constant floor per planning call.
+NB: TD-MPC's original planner floors the refit sigma at a minimum ``min_sigma``
+(their epsilon) so the sampler can never fully stop exploring -- a fix for the
+premature-convergence failure mode this repo diagnosed empirically in
+`pureCEM.py` / `Experimental Report2_Policy Prior.md`. That floor has been
+REMOVED here on purpose: sigma is left free to collapse so premature
+convergence can occur and be measured.
 
 Everything else -- warm start by shifting the converged mean forward one step,
 `.act(state)` / `run_episode()` -- matches `phase2.py`'s conventions.
@@ -134,10 +131,11 @@ class TDMPCPlanner:
         num_samples: int = 512,
         num_policy_samples: int = 25,
         num_elites: int = 64,
-        max_iters: int = 6,
+        max_iters: int = int(1e10),
         sigma_init: float = 2.0,
-        min_sigma: float = 0.1,
         temperature: float = 20.0,
+        tol_mu: float = 1e-3,
+        tol_sigma: float = 1e-3,
         gamma: float = 1.0,
         terminal_value: Callable[[np.ndarray], np.ndarray] | None = None,
         prior: "SACPrior | None" = None,
@@ -152,10 +150,13 @@ class TDMPCPlanner:
                                iteration (N_pi). 0 / ``prior=None`` -> plain
                                MPPI-with-elites (no policy candidates).
         num_elites          : top-K trajectories kept before the soft update.
-        max_iters           : refinement iterations J per timestep (TD-MPC: 6).
+        max_iters           : hard cap on refinement iterations per timestep;
+                               with the default 1e10 the loop runs until it
+                               converges via tol_mu / tol_sigma (TD-MPC's paper
+                               uses a fixed 6).
         sigma_init          : std the Gaussian is (re)initialized to.
-        min_sigma           : floor on the refit std (TD-MPC's epsilon) --
-                               keeps the sampler from prematurely collapsing.
+        tol_mu              : stop when ||mu - prev_mu|| < tol_mu.
+        tol_sigma           : stop when max(sigma) < tol_sigma (collapsed).
         temperature         : softmax denominator lambda over elite returns
                                (small -> greedy), same convention as
                                `phase2.MPPIPlanner`.
@@ -174,8 +175,9 @@ class TDMPCPlanner:
         self.num_elites = int(num_elites)
         self.max_iters = int(max_iters)
         self.sigma_init = float(sigma_init)
-        self.min_sigma = float(min_sigma)
         self.temperature = float(temperature)
+        self.tol_mu = float(tol_mu)
+        self.tol_sigma = float(tol_sigma)
         self.gamma = float(gamma)
         self.terminal_value = terminal_value
         self.prior = prior
@@ -185,6 +187,35 @@ class TDMPCPlanner:
     def reset(self) -> None:
         """Clear the warm-started mean (call between episodes)."""
         self.mu = np.zeros((self.horizon, self.env.action_dim))
+        # premature-convergence bookkeeping (per episode)
+        self.n_plans = 0
+        self.n_premature = 0
+
+    def _check_premature(self, state: np.ndarray, mu: np.ndarray, sigma: np.ndarray) -> bool:
+        """Probe whether the converged plan ``mu`` is only a *premature* optimum:
+        perturb each action coordinate by +/-10 sigma and see if any single such
+        move improves the planned return. If so, the sampler collapsed before
+        reaching a real optimum (the distribution stopped exploring too early).
+
+        Uses the SAME objective the planner optimizes -- H-step return PLUS the
+        terminal value -- so the check is consistent with what convergence meant
+        (this is why ``self.terminal_value`` is passed, unlike the plain-CEM
+        variants whose objective has no terminal term)."""
+        lo, hi = self.env.action_low, self.env.action_high
+        mu_return = _rollout_returns(self.env, state, mu[None], self.gamma, self.terminal_value)[0]
+        H, adim = mu.shape
+        for h in range(H):
+            for d in range(adim):
+                for sign in (1.0, -1.0):
+                    mu_test = mu.copy()
+                    mu_test[h, d] += sign * 10.0 * sigma[h, d]
+                    test_return = _rollout_returns(
+                        self.env, state, np.clip(mu_test, lo, hi)[None], self.gamma,
+                        self.terminal_value,
+                    )[0]
+                    if test_return > mu_return:
+                        return True
+        return False
 
     def plan(self, state: np.ndarray) -> np.ndarray:
         H, N, Npi, K = self.horizon, self.num_samples, self.num_policy_samples, self.num_elites
@@ -204,7 +235,10 @@ class TDMPCPlanner:
         else:
             policy_actions = np.zeros((0, H, adim))
 
+        converged = False
         for _ in range(self.max_iters):
+            prev_mu = mu
+
             # 1. sample N sequences from the current Gaussian + clip
             noise = self.rng.normal(size=(N, H, adim))
             gauss_actions = np.clip(mu + sigma * noise, lo, hi)
@@ -219,14 +253,26 @@ class TDMPCPlanner:
             elite_returns = returns[elite_idx]
 
             # 4. importance-weighted (soft, MPPI-style) update over the
-            #    elites only, with sigma floored at min_sigma.
+            #    elites only. NOTE: the sigma floor (min_sigma) has been
+            #    removed -- sigma is free to collapse, so premature
+            #    convergence can occur and be measured.
             beta = elite_returns.max()
             weights = np.exp((elite_returns - beta) / lam)
             weights /= weights.sum()
 
             mu = np.einsum("n,nhd->hd", weights, elite_actions)
             var = np.einsum("n,nhd->hd", weights, (elite_actions - mu) ** 2)
-            sigma = np.maximum(np.sqrt(var), self.min_sigma)
+            sigma = np.sqrt(var)
+
+            # convergence
+            if np.linalg.norm(mu - prev_mu) < self.tol_mu or sigma.max() < self.tol_sigma:
+                converged = True
+                break
+
+        # record whether this planning call converged prematurely
+        self.n_plans += 1
+        if converged and self._check_premature(state, mu, sigma):
+            self.n_premature += 1
 
         action = mu[0].copy()
         # warm start: shift the plan forward by one step
@@ -286,7 +332,7 @@ if __name__ == "__main__":
         env = LQREnv(noise_std=0.0, seed=0)
         planner = TDMPCPlanner(
             env, horizon=H, num_samples=512, num_policy_samples=25, num_elites=64,
-            max_iters=6, terminal_value=terminal_value, prior=prior, seed=0,
+            terminal_value=terminal_value, prior=prior, seed=0,
         )
         total, traj = run_episode(env, planner, init_state=s0, T=200)
         print(f"TD-MPC planner (H={H:>2}, N=512, Npi=25, K=64) reward (T=200): "

@@ -56,37 +56,6 @@ def _rollout_returns(env: LQREnv, state: np.ndarray, actions: np.ndarray, gamma:
     return returns
 
 
-def _finite_horizon_P0(env: LQREnv, H: int, gamma: float) -> np.ndarray:
-    """Backward Riccati matrix ``P0`` for the H-step (no terminal cost) LQR
-    subproblem that CEM optimizes at each timestep.
-
-    The subproblem is
-        min  sum_{h=0}^{H-1} gamma^h (s_h^T Q s_h + a_h^T R a_h)
-        s.t. s_{h+1} = A s_h + B a_h,   s_0 given,
-    with NO cost on the terminal state s_H (the rollout stops after H rewards).
-    Its optimal cost is ``s_0^T P0 s_0`` -> optimal *return* is ``-s_0^T P0 s_0``.
-
-    The discount is folded in via the standard change of variables
-    ``(A, B) -> (sqrt(gamma) A, sqrt(gamma) B)``, which turns the discounted
-    problem into an ordinary (undiscounted) finite-horizon LQR. ``P0`` is
-    state-independent, so we compute it once and reuse it every timestep.
-
-    NB: this is the *unconstrained* optimum; it ignores the action box
-    ``[action_low, action_high]``, so it is an upper bound on the return any
-    (clipped) CEM plan can achieve -- exactly the ceiling the convergence gate
-    in ``plan`` measures progress against.
-    """
-    g = np.sqrt(gamma)
-    A, B = g * env.A, g * env.B
-    Q, R = env.Q, env.R
-    P = np.zeros_like(Q)                       # P_H = 0: no terminal-state cost
-    for _ in range(H):
-        BtP = B.T @ P
-        K = np.linalg.solve(R + BtP @ B, BtP @ A)
-        P = Q + A.T @ P @ A - (A.T @ P @ B) @ K
-    return P
-
-
 # --------------------------------------------------------------------------- #
 # SAC policy prior
 # --------------------------------------------------------------------------- #
@@ -141,7 +110,7 @@ class CEMPlanner:
         horizon: int = 15,
         num_samples: int = 1000,
         num_elites: int = 50,
-        max_iters: int = 1000,
+        max_iters: int = int(1e10),
         prior_std_scale: float = 5.0,
         tol_mu: float = 1e-3,
         tol_sigma: float = 1e-3,
@@ -159,11 +128,8 @@ class CEMPlanner:
         max_iters       : iteration budget I per timestep.
         prior_std_scale : multiplier applied to the SAC action std when seeding
                           the initial sampling distribution (5.0 -> widen it).
-        tol_mu          : (unused) kept for signature compatibility.
-        tol_sigma       : first-level stop gate -- only *consider* stopping once
-                          max(sigma) < tol_sigma (distribution collapsed). The
-                          loop then actually stops when the mean plan's planned
-                          return regresses vs. the previous iteration.
+        tol_mu          : stop when ||mu - prev_mu|| < tol_mu.
+        tol_sigma       : stop when max(sigma) < tol_sigma (distribution collapsed).
         gamma           : discount for the planned return.
         sac_path        : checkpoint used to build the SAC policy prior.
         prior           : a preloaded SACPrior (overrides ``sac_path``).
@@ -179,15 +145,34 @@ class CEMPlanner:
         self.gamma = float(gamma)
         self.prior = prior if prior is not None else SACPrior(sac_path)
         self.rng = np.random.default_rng(seed)
-        # closed-form finite-horizon LQR cost matrix for the H-step subproblem;
-        # state-independent, so compute it once and reuse every timestep.
-        self._P0 = _finite_horizon_P0(self.env, self.horizon, self.gamma)
         self.reset()
 
     def reset(self) -> None:
         """No warm-started state to clear -- each timestep is re-seeded from the
-        SAC policy prior. Kept for API compatibility with ``run_episode``."""
-        pass
+        SAC policy prior. Kept for API compatibility with ``run_episode``.
+        Also zeroes the per-episode premature-convergence counters."""
+        self.n_plans = 0
+        self.n_premature = 0
+
+    def _check_premature(self, state: np.ndarray, mu: np.ndarray, sigma: np.ndarray) -> bool:
+        """Probe whether the converged plan ``mu`` is only a *premature* optimum:
+        perturb each action coordinate by +/-10 sigma and see if any single such
+        move improves the planned return. If so, the sampler collapsed before
+        reaching a real optimum (the distribution stopped exploring too early)."""
+        lo, hi = self.env.action_low, self.env.action_high
+        mu_return = _rollout_returns(self.env, state, mu[None], self.gamma)[0]
+        H, adim = mu.shape
+        for h in range(H):
+            for d in range(adim):
+                for sign in (1.0, -1.0):
+                    mu_test = mu.copy()
+                    mu_test[h, d] += sign * 10.0 * sigma[h, d]
+                    test_return = _rollout_returns(
+                        self.env, state, np.clip(mu_test, lo, hi)[None], self.gamma
+                    )[0]
+                    if test_return > mu_return:
+                        return True
+        return False
 
     def _init_from_prior(self, state: np.ndarray):
         """Seed (mu, sigma) for the H-step distribution by rolling the SAC
@@ -212,19 +197,10 @@ class CEMPlanner:
         # (mean = policy rollout, std = policy std * prior_std_scale)
         mu, sigma = self._init_from_prior(state)
 
-        # track the previous mean plan and its planned return, for the
-        # second-level convergence test below.
-        prev_mu = mu.copy()
-        prev_mu_return = _rollout_returns(self.env, state, mu[None], self.gamma)[0]
-
-        # Closed-form optimal return of this H-step LQR subproblem (finite-
-        # horizon Riccati, no terminal cost): optimal cost = s0^T P0 s0, so the
-        # optimal *return* is -s0^T P0 s0. State-dependent but iteration-
-        # independent, so compute it once here.
-        s0 = np.asarray(state, dtype=np.float64)
-        opt_sub_return = -float(s0 @ self._P0 @ s0)
-
+        converged = False
         for times in range(self.max_iters):
+            prev_mu = mu
+
             # 1. sample + clip
             noise = self.rng.normal(size=(N, H, adim))
             actions = np.clip(mu + sigma * noise, lo, hi)
@@ -240,22 +216,15 @@ class CEMPlanner:
             mu = elites.mean(axis=0)
             sigma = elites.std(axis=0)
 
-            # two-level convergence:
-            #   level 1 -- the distribution has collapsed (max std small); only
-            #              once that holds do we consider stopping, and
-            #   level 2 -- the refitted mean plan's planned return REGRESSED
-            #              relative to the previous iteration.
-            # When both hold, stop and keep the previous (better) plan.
-            mu_return = _rollout_returns(self.env, state, mu[None], self.gamma)[0]
-
-            # ``opt_sub_return`` (computed once above) is the closed-form ceiling
-            # for this H-step LQR subproblem. ``opt_sub_return - *_return`` is the
-            # optimality gap; stop once the distribution has collapsed AND the
-            # gap stopped shrinking (current gap > 90% of the previous gap).
-            if sigma.max() < self.tol_sigma and (opt_sub_return - mu_return) > 0.9 * (opt_sub_return - prev_mu_return):  # 這個終止條件非常重要，要被寫到新的報告書裡面
-                mu = prev_mu
+            # convergence
+            if np.linalg.norm(mu - prev_mu) < self.tol_mu or sigma.max() < self.tol_sigma:
+                converged = True
                 break
-            prev_mu, prev_mu_return = mu.copy(), mu_return
+
+        # record whether this planning call converged prematurely
+        self.n_plans += 1
+        if converged and self._check_premature(state, mu, sigma):
+            self.n_premature += 1
 
         action = mu[0].copy()
         if times == self.max_iters - 1:

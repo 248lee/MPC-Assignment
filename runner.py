@@ -92,31 +92,43 @@ def evaluate_method(env_name: str, method_name: str, horizons, seed: int = 0, ve
         env = espec.make(seed)
         agent = mspec.build(env, horizons[0] if horizons else 1, seed, prior, terminal_value)
         reward, _ = run_episode(env, agent, init, T)
+        n_prem = int(getattr(agent, "n_premature", 0))
+        n_plan = int(getattr(agent, "n_plans", 0))
         if verbose:
             print(f"[{env_name}/{method_name}]  reward (T={T}): {reward:.4f}  (horizon-independent)")
         return dict(
             env=env_name, method=method_name,
             horizons=np.array(horizons, dtype=np.int64),
             rewards=np.array([reward], dtype=np.float64),
+            premature_counts=np.array([n_prem], dtype=np.int64),
+            planning_counts=np.array([n_plan], dtype=np.int64),
             horizon_dependent=np.array(False),
             seed=np.int64(seed), eval_T=np.int64(T),
             config_sig=config_sig(env_name, method_name, horizons, seed),
         )
 
     rewards = np.full(len(horizons), np.nan)
+    # per-horizon (== per-episode) premature-convergence bookkeeping
+    premature_counts = np.zeros(len(horizons), dtype=np.int64)
+    planning_counts = np.zeros(len(horizons), dtype=np.int64)
     if verbose:
         print(f"[{env_name}/{method_name}]  sweeping H over {horizons[0]}..{horizons[-1]} (T={T})")
     for i, H in enumerate(horizons):
         env = espec.make(seed)
         agent = mspec.build(env, H, seed, prior, terminal_value)
         rewards[i], _ = run_episode(env, agent, init, T)
+        premature_counts[i] = int(getattr(agent, "n_premature", 0))
+        planning_counts[i] = int(getattr(agent, "n_plans", 0))
         if verbose:
-            print(f"    H={H:>3}  reward={rewards[i]:12.4f}")
+            print(f"    H={H:>3}  reward={rewards[i]:12.4f}"
+                  f"  premature={premature_counts[i]}/{planning_counts[i]}")
 
     return dict(
         env=env_name, method=method_name,
         horizons=np.array(horizons, dtype=np.int64),
         rewards=rewards,
+        premature_counts=premature_counts,
+        planning_counts=planning_counts,
         horizon_dependent=np.array(True),
         seed=np.int64(seed), eval_T=np.int64(T),
         config_sig=config_sig(env_name, method_name, horizons, seed),
@@ -152,6 +164,10 @@ def load_result(env_name: str, method_name: str):
 
 def is_fresh(cached: dict | None, env_name: str, method_name: str, horizons, seed: int) -> bool:
     if cached is None or "config_sig" not in cached:
+        return False
+    # require the premature-convergence arrays too, so pre-instrumentation
+    # caches are treated as stale and regenerated with the new bookkeeping.
+    if "premature_counts" not in cached or "planning_counts" not in cached:
         return False
     want = config_sig(env_name, method_name, horizons, seed)
     got = cached["config_sig"]
