@@ -285,22 +285,12 @@ class IGOPlanner:
 
             mu_return = _rollout_returns(self.env, state, mu[None], self.gamma)[0]
 
-            # convergence, level 0 -- the soft update barely moved the mean plan.
-            # IGO's variance injection resists collapse, so this mean-stabilization
-            # test (not sigma collapse) is what usually stops the loop.
-            if np.linalg.norm(mu - prev_mu) < self.tol_mu:
-                break
 
             # convergence, two-level (kept from policy-prior CEM):
             #   level 1 -- the distribution has collapsed (max std small); only
             #              once that holds do we consider stopping, and
-            #   level 2 -- the refitted mean plan's optimality gap to the
-            #              closed-form LQR ceiling ``opt_sub_return`` stopped
-            #              shrinking (current gap > 90% of the previous gap).
-            # When both hold, stop and keep the previous (better) plan.
+           
             if np.linalg.norm(mu - prev_mu) < self.tol_mu or sigma.max() < self.tol_sigma:
-                break
-                mu = prev_mu
                 break
             prev_mu, prev_mu_return = mu.copy(), mu_return
 
