@@ -13,6 +13,7 @@ from __future__ import annotations
 import os
 
 import numpy as np
+from tqdm import tqdm
 
 from registry import ENV_REGISTRY, METHOD_REGISTRY, check_compatible
 
@@ -28,7 +29,7 @@ def run_episode(env, agent, init_state, T):
     s = env.reset(state=None if init_state is None else np.asarray(init_state, np.float64))
     total = 0.0
     last = s
-    for _ in range(T):
+    for _ in tqdm(range(T)):
         a = agent.act(s)
         s, r, term, trunc, _ = env.step(a)
         total += r

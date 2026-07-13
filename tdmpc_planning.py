@@ -131,7 +131,7 @@ class TDMPCPlanner:
         num_samples: int = 512,
         num_policy_samples: int = 25,
         num_elites: int = 64,
-        max_iters: int = int(1e10),
+        max_iters: int = int(1e3),
         sigma_init: float = 2.0,
         temperature: float = 20.0,
         tol_mu: float = 1e-3,
