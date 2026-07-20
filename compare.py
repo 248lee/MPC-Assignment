@@ -8,6 +8,9 @@ same seed) and compares episode reward:
   * Optimal LQR feedback  (a = -K s)          -- gold-standard baseline
   * Random-shooting MPC, horizon sweep         -- Phase I
   * IGO-ML, horizon sweep                       -- soft (dt) CEM (see IGO.py)
+  * IGO complete sample-based, horizon sweep    -- weighted-MLE CEM over ALL
+                                                   samples (see
+                                                   IGO_complete_sample_based.py)
   * Policy-prior IGO-ML (SAC seed), two flavours
   * Policy-prior random shooting (SAC seed)
 
@@ -46,6 +49,7 @@ from optimal import LQRController, run_episode as run_optimal_episode
 from phase1 import RandomShootingMPC, run_episode as run_mpc_episode
 from phase2 import run_episode as run_plan_episode
 from IGO import IGOPlanner
+from IGO_complete_sample_based import IGOPlanner as IGOCompleteSampleBased
 from policy_prior_IGO import IGOPlanner as PolicyPriorIGO, SACPrior
 from policy_prior_random_shooting import RandomShootingPlanner as PolicyPriorRS
 from sac_lqr import GaussianPolicy, STATE_DIM, ACTION_DIM
@@ -129,8 +133,8 @@ def make_env() -> LQREnv:
 
 
 def make_refinement_planners(prior, H, detect_premature=False):
-    """Build the three IGO refinement planners (igo, pp-large, ppc-consv) for
-    horizon ``H``.
+    """Build the four IGO refinement planners (igo, igo-cs, pp-large, ppc-consv)
+    for horizon ``H``.
 
     Single source of truth for their hyperparameters, shared by ``run_sweep``
     (reward) and ``run_premature_sweep`` (premature-convergence check), so the
@@ -139,6 +143,14 @@ def make_refinement_planners(prior, H, detect_premature=False):
     and ``ppc`` are ``None`` when no SAC ``prior`` is available.
     """
     igo = IGOPlanner(
+        make_env(), horizon=H, num_samples=NUM_SAMPLES, num_elites=NUM_ELITES,
+        max_iters=IGO_ITERS, sigma_init=REFINE_SIGMA, dt=DT, seed=SEED,
+        detect_premature=detect_premature,
+    )
+    # complete sample-based IGO: identical hyperparameters, but re-fits the
+    # Gaussian by a weighted MLE over ALL samples each iteration (non-elites
+    # kept at weight 1-dt) instead of the variance-injection soft update.
+    igo_cs = IGOCompleteSampleBased(
         make_env(), horizon=H, num_samples=NUM_SAMPLES, num_elites=NUM_ELITES,
         max_iters=IGO_ITERS, sigma_init=REFINE_SIGMA, dt=DT, seed=SEED,
         detect_premature=detect_premature,
@@ -158,7 +170,7 @@ def make_refinement_planners(prior, H, detect_premature=False):
             max_iters=IGO_ITERS, prior_std_scale=1.0 / (2.0 * H), dt=DT,
             prior=prior, seed=SEED, detect_premature=detect_premature,
         )
-    return igo, pp, ppc
+    return igo, igo_cs, pp, ppc
 
 
 def run_sweep():
@@ -177,10 +189,10 @@ def run_sweep():
         print(f"[Policy-prior IGO]  {SAC_MODEL_FILE} not found -> column will be NaN.")
 
     # ---- 2) planners over horizons -------------------------------------- #
-    mpc_rewards, igo_rewards = [], []
+    mpc_rewards, igo_rewards, igo_cs_rewards = [], [], []
     pp_rewards, ppc_rewards, pprs_rewards = [], [], []   # pp=large-explore, ppc=conservative
-    print(f"{'H':>3} | {'MPC reward':>14} | {'IGO reward':>14} | {'PP-large reward':>16} "
-          f"| {'PP-consv reward':>16} | {'PP-RandShoot':>14}")
+    print(f"{'H':>3} | {'MPC reward':>14} | {'IGO reward':>14} | {'IGO-CS reward':>14} "
+          f"| {'PP-large reward':>16} | {'PP-consv reward':>16} | {'PP-RandShoot':>14}")
     print("-" * 70)
     for H in HORIZONS:
         env = make_env()
@@ -189,11 +201,13 @@ def run_sweep():
         )
         r_mpc, _ = run_mpc_episode(env, agent, init_state=INIT_STATE, T=T)
 
-        # plain IGO-ML + the two policy-prior IGO flavours (large-explore,
-        # conservative), all built from the shared factory so their hyperparams
-        # stay in lockstep with the premature-convergence sweep.
-        igo, pp, ppc = make_refinement_planners(prior, H)
+        # plain IGO-ML, the complete sample-based IGO, and the two policy-prior
+        # IGO flavours (large-explore, conservative), all built from the shared
+        # factory so their hyperparams stay in lockstep with the
+        # premature-convergence sweep.
+        igo, igo_cs, pp, ppc = make_refinement_planners(prior, H)
         r_igo, _ = run_plan_episode(igo.env, igo, init_state=INIT_STATE, T=T)
+        r_igo_cs, _ = run_plan_episode(igo_cs.env, igo_cs, init_state=INIT_STATE, T=T)
 
         if prior is not None:
             r_pp, _ = run_plan_episode(pp.env, pp, init_state=INIT_STATE, T=T)
@@ -213,17 +227,19 @@ def run_sweep():
 
         mpc_rewards.append(r_mpc)
         igo_rewards.append(r_igo)
+        igo_cs_rewards.append(r_igo_cs)
         pp_rewards.append(r_pp)
         ppc_rewards.append(r_ppc)
         pprs_rewards.append(r_pprs)
-        print(f"{H:>3} | {r_mpc:>14.3f} | {r_igo:>14.3f} | {r_pp:>16.3f} "
-              f"| {r_ppc:>16.3f} | {r_pprs:>14.3f}")
+        print(f"{H:>3} | {r_mpc:>14.3f} | {r_igo:>14.3f} | {r_igo_cs:>14.3f} "
+              f"| {r_pp:>16.3f} | {r_ppc:>16.3f} | {r_pprs:>14.3f}")
 
     results = dict(
         horizons=np.array(HORIZONS),
         opt_reward=np.float64(opt_reward),
         mpc_rewards=np.array(mpc_rewards),
         igo_rewards=np.array(igo_rewards),
+        igo_cs_rewards=np.array(igo_cs_rewards),
         pp_rewards=np.array(pp_rewards),
         ppc_rewards=np.array(ppc_rewards),
         pprs_rewards=np.array(pprs_rewards),
@@ -236,12 +252,20 @@ def run_sweep():
 
 def load_or_run():
     """Load cached results if present and matching the current config, else run."""
+    # Every array a downstream plot/printout expects. A cache written before a
+    # new planner column was added still matches CONFIG_SIG (that column adds no
+    # new hyperparameter), so we also require every key to be present.
+    required_keys = (
+        "horizons", "opt_reward", "mpc_rewards", "igo_rewards", "igo_cs_rewards",
+        "pp_rewards", "ppc_rewards", "pprs_rewards",
+    )
     if os.path.exists(RESULTS_FILE):
         data = np.load(RESULTS_FILE)
         if (
             "config_sig" in data
             and data["config_sig"].shape == CONFIG_SIG.shape
             and np.allclose(data["config_sig"], CONFIG_SIG)
+            and all(k in data.files for k in required_keys)
         ):
             print(f"Loaded cached results from {RESULTS_FILE} (config matches).")
             return {k: data[k] for k in data.files}
@@ -271,15 +295,16 @@ def run_episode_premature(env, agent, init_state=None, T=None):
 
 
 def run_premature_sweep():
-    """Run the three IGO planners with premature-convergence detection, save premature_check.csv.
+    """Run the four IGO planners with premature-convergence detection, save premature_check.csv.
 
-    For each horizon H and each of (IGO-ML, large-explore prior IGO, conservative prior IGO),
-    rolls out a full T-step episode and records per-timestep whether premature convergence was
-    detected: a True entry means some ±10σ perturbation of a single mu entry outperforms the
-    converged plan, indicating the planner stopped before reaching a local optimum.
+    For each horizon H and each of (IGO-ML, complete sample-based IGO, large-explore prior IGO,
+    conservative prior IGO), rolls out a full T-step episode and records per-timestep whether
+    premature convergence was detected: a True entry means some perturbation of the converged
+    plan (within the Sobol shell) outperforms it, indicating the planner stopped before reaching
+    a local optimum.
     """
     print("=" * 70)
-    print("Running premature convergence check (3 planners × 20 horizons × T steps)...")
+    print("Running premature convergence check (4 planners × 20 horizons × T steps)...")
     print("=" * 70)
     prior = SACPrior(SAC_MODEL_FILE) if os.path.exists(SAC_MODEL_FILE) else None
     if prior is None:
@@ -289,10 +314,14 @@ def run_premature_sweep():
     for H in HORIZONS:
         # SAME factory as run_sweep -> identical hyperparameters, only with
         # premature-convergence detection switched on.
-        igo, pp, ppc = make_refinement_planners(prior, H, detect_premature=True)
+        igo, igo_cs, pp, ppc = make_refinement_planners(prior, H, detect_premature=True)
         _, _, igo_flags = run_episode_premature(igo.env, igo, init_state=INIT_STATE, T=T)
         for t, f in enumerate(igo_flags):
             rows.append(("igo", H, t, f))
+
+        _, _, igo_cs_flags = run_episode_premature(igo_cs.env, igo_cs, init_state=INIT_STATE, T=T)
+        for t, f in enumerate(igo_cs_flags):
+            rows.append(("igo-cs", H, t, f))
 
         pp_summary = ppc_summary = "N/A (no SAC model)"
         if prior is not None:
@@ -308,6 +337,7 @@ def run_premature_sweep():
 
         n = len(igo_flags)
         print(f"H={H:>2}: igo={sum(igo_flags)}/{n} premature  "
+              f"igo-cs={sum(igo_cs_flags)}/{len(igo_cs_flags)}  "
               f"pp-large={pp_summary}  pp-consv={ppc_summary}")
 
     with open("premature_check.csv", "w", newline="") as fh:
@@ -322,6 +352,7 @@ def main():
     opt_reward = float(results["opt_reward"])
     mpc_rewards = list(results["mpc_rewards"])
     igo_rewards = list(results["igo_rewards"])
+    igo_cs_rewards = list(results["igo_cs_rewards"]) if "igo_cs_rewards" in results else None
     pp_rewards = list(results["pp_rewards"]) if "pp_rewards" in results else None
     ppc_rewards = list(results["ppc_rewards"]) if "ppc_rewards" in results else None
     pprs_rewards = list(results["pprs_rewards"]) if "pprs_rewards" in results else None
@@ -330,6 +361,10 @@ def main():
     opt_cost = -opt_reward
     mpc_cost = [-r for r in mpc_rewards]
     igo_cost = [-r for r in igo_rewards]
+    # complete sample-based IGO curve (None if it wasn't in the cache)
+    igo_cs_cost = None
+    if igo_cs_rewards is not None and not np.all(np.isnan(igo_cs_rewards)):
+        igo_cs_cost = [-r for r in igo_cs_rewards]
     # policy-prior IGO curves (may be all-NaN if the SAC model was unavailable)
     pp_cost = None
     if pp_rewards is not None and not np.all(np.isnan(pp_rewards)):
@@ -368,6 +403,9 @@ def main():
         plt.plot(hs, [mpc_cost[i] for i in idx], "o-", color="tab:blue",
                  label="Random-shooting MPC")
         plt.plot(hs, [igo_cost[i] for i in idx], "s-", color="tab:green", label="IGO-ML")
+        if igo_cs_cost is not None:
+            plt.plot(hs, [igo_cs_cost[i] for i in idx], "^-", color="tab:orange",
+                     label="IGO complete sample-based")
         if pp_cost is not None:
             plt.plot(hs, [pp_cost[i] for i in idx], "d-", color="tab:purple",
                      label="Large-explore prior IGO (SAC)")
@@ -397,6 +435,7 @@ def main():
         idx = [i for i, H in enumerate(HORIZONS) if H >= h_min]
         hs = [HORIZONS[i] for i in idx]
         igo = [igo_cost[i] for i in idx]
+        igo_cs = [igo_cs_cost[i] for i in idx] if igo_cs_cost is not None else None
         pp = [pp_cost[i] for i in idx] if pp_cost is not None else None
         ppc = [ppc_cost[i] for i in idx] if ppc_cost is not None else None
 
@@ -412,6 +451,9 @@ def main():
                 ax.axhline(sac_cost, color="tab:red", ls="--", lw=2,
                            label=f"SAC (cost={sac_cost:.2f})")
             ax.plot(hs, igo, "s-", color="tab:green", label="IGO-ML")
+            if igo_cs is not None:
+                ax.plot(hs, igo_cs, "^-", color="tab:orange",
+                        label="IGO complete sample-based")
             if pp is not None:
                 ax.plot(hs, pp, "d-", color="tab:purple",
                         label="Large-explore prior IGO (SAC)")
@@ -429,8 +471,10 @@ def main():
 
         # bottom: linear detail range
         ax_lo.set_ylim(opt_cost - 0.5, y_break)
-        # top: log scale covering the diverging costs
+        # top: log scale covering the diverging costs (across every plotted curve)
         big = [c for c in igo if c > y_break]
+        if igo_cs is not None:
+            big += [c for c in igo_cs if c > y_break]
         top_lo = 10 ** np.floor(np.log10(min(big)))
         top_hi = 10 ** np.ceil(np.log10(max(big)))
         ax_hi.set_yscale("log")
@@ -466,6 +510,10 @@ def main():
     print(f"\nOptimal episode reward          : {opt_reward:10.3f}")
     print(f"Best random-shooting MPC : H={best_H:<3} reward {max(mpc_rewards):10.3f}")
     print(f"Best IGO-ML              : H={best_H_igo:<3} reward {max(igo_rewards):10.3f}")
+    if igo_cs_cost is not None:
+        best_H_igo_cs = HORIZONS[int(np.nanargmax(igo_cs_rewards))]
+        print(f"Best IGO complete sample-based : H={best_H_igo_cs:<3} reward "
+              f"{np.nanmax(igo_cs_rewards):10.3f}")
     if pp_cost is not None:
         best_H_pp = HORIZONS[int(np.nanargmax(pp_rewards))]
         print(f"Best Large-explore prior IGO : H={best_H_pp:<3} reward "

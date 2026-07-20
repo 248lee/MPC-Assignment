@@ -8,6 +8,10 @@ same seed) and compares episode reward:
   * Optimal LQR feedback  (a = -K s)          -- gold-standard baseline
   * Random-shooting MPC, horizon sweep         -- Phase I
   * IGO-ML, horizon sweep                       -- soft (dt) CEM (see IGO.py)
+  * CEM (dt=1), horizon sweep                   -- hard elite replacement
+  * IGO complete sample-based, horizon sweep    -- weighted-MLE CEM over ALL
+                                                   samples (see
+                                                   IGO_complete_sample_based.py)
 
 Because plain random shooting at H=1 lets the unstable system diverge
 (reward ~ -1e26), we plot COST = -reward on a LOG scale so every regime is
@@ -43,6 +47,7 @@ from lqr_env import LQREnv
 from optimal import LQRController, run_episode as run_optimal_episode
 from phase1 import RandomShootingMPC, run_episode as run_mpc_episode
 from IGO import IGOPlanner
+from IGO_complete_sample_based import IGOPlanner as IGOCompleteSampleBased
 from sac_lqr import GaussianPolicy, STATE_DIM, ACTION_DIM
 
 
@@ -63,7 +68,7 @@ SEED = 0
 REFINE_SIGMA = 0.2                         # proposal/noise std for IGO
 NUM_ELITES = 250                           # IGO top-K (250/1000 = 25% elite)
 IGO_ITERS = 1e10                           # IGO max iterations per step (rely on tol)
-DT = 0.1                                  # IGO-ML step size (dt=1 -> CEM)
+DT = 0.05                                  # IGO-ML step size (dt=1 -> CEM)
 
 
 SAC_MODEL_FILE = "None"              # trained SAC actor (sac_lqr.py)
@@ -156,10 +161,10 @@ def run_sweep():
     print("-" * 70)
 
     # ---- 2) planners over horizons -------------------------------------- #
-    mpc_rewards, igo_rewards, cem_rewards = [], [], []
+    mpc_rewards, igo_rewards, cem_rewards, cs_rewards = [], [], [], []
     premature_rows = []   # (planner, H, timestep, premature) for the CSV
     print(f"{'H':>3} | {'MPC reward':>14} | {'IGO reward':>14} | {'CEM reward':>14} | "
-          f"{'premature (igo/cem)':>20}")
+          f"{'CS reward':>14} | {'premature (igo/cem/cs)':>26}")
     print("-" * 70)
     for H in HORIZONS:
         env = make_env()
@@ -190,12 +195,27 @@ def run_sweep():
         for t, f in enumerate(cem_flags):
             premature_rows.append(("cem", H, t, f))
 
+        # complete sample-based IGO: same dt as IGO-ML, but re-fits the Gaussian
+        # by a weighted MLE over ALL samples (non-elites at weight 1-dt) rather
+        # than the variance-injection soft update.
+        env = make_env()
+        cs = IGOCompleteSampleBased(
+            env, horizon=H, num_samples=NUM_SAMPLES, num_elites=NUM_ELITES,
+            max_iters=IGO_ITERS, sigma_init=REFINE_SIGMA, dt=DT, seed=SEED,
+            detect_premature=True,
+        )
+        r_cs, _, cs_flags = run_episode_premature(env, cs, init_state=INIT_STATE, T=T)
+        for t, f in enumerate(cs_flags):
+            premature_rows.append(("igo-cs", H, t, f))
+
         mpc_rewards.append(r_mpc)
         igo_rewards.append(r_igo)
         cem_rewards.append(r_cem)
+        cs_rewards.append(r_cs)
         n = len(igo_flags)
         print(f"{H:>3} | {r_mpc:>14.3f} | {r_igo:>14.3f} | {r_cem:>14.3f} | "
-              f"{f'{sum(igo_flags)}/{n} , {sum(cem_flags)}/{n}':>20}")
+              f"{r_cs:>14.3f} | "
+              f"{f'{sum(igo_flags)}/{n} , {sum(cem_flags)}/{n} , {sum(cs_flags)}/{n}':>26}")
 
     with open("premature_check_CEM_and_IGO.csv", "w", newline="") as fh:
         writer = csv.writer(fh)
@@ -209,6 +229,7 @@ def run_sweep():
         mpc_rewards=np.array(mpc_rewards),
         igo_rewards=np.array(igo_rewards),
         cem_rewards=np.array(cem_rewards),
+        cs_rewards=np.array(cs_rewards),
     )
 
 
@@ -218,12 +239,14 @@ def main():
     mpc_rewards = list(results["mpc_rewards"])
     igo_rewards = list(results["igo_rewards"])
     cem_rewards = list(results["cem_rewards"]) if "cem_rewards" in results else None
+    cs_rewards = list(results["cs_rewards"]) if "cs_rewards" in results else None
 
     # ---- 3) plot (cost = -reward, log scale) ---------------------------- #
     opt_cost = -opt_reward
     mpc_cost = [-r for r in mpc_rewards]
     igo_cost = [-r for r in igo_rewards]
     cem_cost = [-r for r in cem_rewards] if cem_rewards is not None else None
+    cs_cost = [-r for r in cs_rewards] if cs_rewards is not None else None
 
     # trained SAC policy: same env / init state / horizon as the optimal run,
     # so it appears as a horizontal dashed line (reactive policy, no planning H).
@@ -253,6 +276,9 @@ def main():
         plt.plot(hs, [igo_cost[i] for i in idx], "s-", color="tab:green", label="IGO-ML")
         if cem_cost is not None:
             plt.plot(hs, [cem_cost[i] for i in idx], "^-", color="tab:orange", label="CEM (dt=1)")
+        if cs_cost is not None:
+            plt.plot(hs, [cs_cost[i] for i in idx], "d-", color="tab:purple",
+                     label="IGO complete sample-based")
         plt.yscale("log")
         plt.xlabel("Planning horizon H")
         plt.ylabel(f"Episode cost  = -reward  (T={T}, log scale)")
@@ -274,6 +300,7 @@ def main():
         hs = [HORIZONS[i] for i in idx]
         igo = [igo_cost[i] for i in idx]
         cem = [cem_cost[i] for i in idx] if cem_cost is not None else None
+        cs = [cs_cost[i] for i in idx] if cs_cost is not None else None
 
         fig, (ax_hi, ax_lo) = plt.subplots(
             2, 1, sharex=True, figsize=(9, 6),
@@ -289,6 +316,8 @@ def main():
             ax.plot(hs, igo, "s-", color="tab:green", label="IGO-ML")
             if cem is not None:
                 ax.plot(hs, cem, "^-", color="tab:orange", label="CEM (dt=1)")
+            if cs is not None:
+                ax.plot(hs, cs, "d-", color="tab:purple", label="IGO complete sample-based")
             ax.grid(True, alpha=0.3)
 
         # mark IGO's lowest-cost (best) horizon with a star
@@ -304,6 +333,8 @@ def main():
         all_diverging = [c for c in igo if c > y_break]
         if cem is not None:
             all_diverging += [c for c in cem if c > y_break]
+        if cs is not None:
+            all_diverging += [c for c in cs if c > y_break]
         top_lo = 10 ** np.floor(np.log10(min(all_diverging)))
         top_hi = 10 ** np.ceil(np.log10(max(all_diverging)))
         ax_hi.set_yscale("log")
@@ -341,6 +372,9 @@ def main():
     if cem_cost is not None:
         best_H_cem = HORIZONS[int(np.argmax(cem_rewards))]
         print(f"Best CEM (dt=1)          : H={best_H_cem:<3} reward {max(cem_rewards):10.3f}")
+    if cs_cost is not None:
+        best_H_cs = HORIZONS[int(np.argmax(cs_rewards))]
+        print(f"Best IGO complete sample-based : H={best_H_cs:<3} reward {max(cs_rewards):10.3f}")
     print(f"\nH=1  random-shooting MPC : {mpc_rewards[0]:.3e}  (diverges -- short-horizon failure)")
     print("=> Refining the sampling distribution (IGO-ML) keeps planning close")
     print("   to optimal across horizons instead of degrading for large H.")

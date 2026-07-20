@@ -217,6 +217,7 @@ class MPPIPlanner:
 # rollout
 # --------------------------------------------------------------------------- #
 def run_episode(env: LQREnv, agent, init_state=None, T: int | None = None):
+    from tqdm import tqdm
     """Roll out a (warm-started) planner; return (total_reward, state_trajectory)."""
     if hasattr(agent, "reset"):
         agent.reset()
@@ -225,7 +226,7 @@ def run_episode(env: LQREnv, agent, init_state=None, T: int | None = None):
         T = env.max_steps
     total = 0.0
     traj = [s.copy()]
-    for _ in range(T):
+    for _ in tqdm(range(T)):
         a = agent.act(s)
         s, r, term, trunc, _ = env.step(a)
         total += r
