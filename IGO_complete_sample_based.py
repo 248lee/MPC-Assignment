@@ -27,6 +27,7 @@ import numpy as np
 from scipy.stats import qmc
 
 from lqr_env import LQREnv
+import math
 
 # reuse the shared trajectory-evaluation and rollout helpers from Phase II so
 # IGO plugs into exactly the same MPC harness as CEM / MPPI.
@@ -141,6 +142,9 @@ class IGOPlanner:
 
     def plan(self, state: np.ndarray) -> np.ndarray:
         H, N, K = self.horizon, self.num_samples, self.num_elites
+        N = math.floor(N * np.log(H + 2) * 2)
+        K = math.floor(K * np.log(H + 2) * 2)
+
         adim = self.env.action_dim
         lo, hi = self.env.action_low, self.env.action_high
         dt = self.dt
