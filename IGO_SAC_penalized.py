@@ -221,7 +221,13 @@ class IGOPlanner:
 
         mu = self.mu                                   # warm-started mean
         sigma = np.full((H, adim), self.sigma_init)    # reset exploration std
-        d_stat_ema = None                              # EMA of the KL step (below)
+        
+        # --- [新增] 位移與路徑長度比 (Displacement vs. Path Length Ratio) 的緩衝區 ---
+        # 建議 window_size 設為 4 或 5 (可透過 self.stop_window 設定)
+        window_size = getattr(self, 'stop_window', 5)
+        mu_history = [mu.copy()]   # 記錄視窗內的 mu 點，注意必須 .copy()
+        step_distances = []        # 記錄視窗內的單步距離 ||d_mu||
+        # -------------------------------------------------------------------------
 
         for times in range(self.max_iters):
             # 1. sample the random shoots (CEM/IGO Gaussian) + clip
@@ -233,7 +239,7 @@ class IGOPlanner:
             actions, returns = _rollout_returns(
                 self.env, state, random_shoots, self.policy, self.kappa,
                 self.gamma, self.rng,
-            )  # For claude: 這些 sample 來得 actions 即為來自 R_{\theta^t}(x) 的分佈
+            )
 
             # 3. top-K elites
             elite_idx = np.argpartition(returns, -K)[-K:]
@@ -242,10 +248,7 @@ class IGOPlanner:
             mu_prev = mu
             sigma_sq_prev = sigma ** 2
 
-            # 4. weighted MLE over ALL samples: elites carry weight 1, non-elites
-            #    carry weight (1 - dt).  After normalizing the weights, the
-            #    weighted mean/variance become next iteration's mu/sigma directly.
-            #    dt=1 zeroes the non-elite weight and recovers plain CEM.
+            # 4. weighted MLE over ALL samples
             weights = np.full(N, 1.0 - dt)
             weights[elite_idx] = weights[elite_idx] + dt * N / K
             weights /= weights.sum()
@@ -255,35 +258,41 @@ class IGOPlanner:
             sigma_sq = (w * (actions - mu) ** 2).sum(axis=0)
             sigma = np.sqrt(sigma_sq)
 
-            # convergence: with Q mixed into the sampling measure the Gaussian
-            # never collapses, so a variance / elite-std gate cannot fire (and is
-            # not the natural-gradient fixed point anyway).  Instead stop when the
-            # parameter move is indistinguishable from Monte-Carlo sampling noise.
-            # Measure the step in the Fisher/KL metric at the OLD point: for a
-            # diagonal Gaussian the per-step KL quadratic form (= 2 * KL) is
-            #     D = sum_k [ dmu_k^2 / var_k + dvar_k^2 / (2 var_k^2) ].
-            # A finite sample makes the weighted MLE jitter, so D has a pure-noise
-            # floor  E[D] ~ dim / N_eff  (dim = 2 * #coords; effective sample size
-            # N_eff = 1 / sum_i w_i^2 shrinks under heavy selection).  Gate on the
-            # EMA-smoothed signal-to-noise ratio  D / floor.
-            var_old = np.maximum(sigma_sq_prev, 1e-12)
-            d_mu = mu - mu_prev
-            d_var = sigma_sq - sigma_sq_prev
-            D = float((d_mu ** 2 / var_old + d_var ** 2 / (2.0 * var_old ** 2)).sum())
-            n_eff = 1.0 / float(np.sum(weights ** 2))
-            noise_floor = 2 * mu.size / n_eff          # E[D] under pure noise
-            d_stat_ema = D if d_stat_ema is None else 0.5 * d_stat_ema + 0.5 * D
-            # if d_stat_ema < self.stop_snr * noise_floor:
-            #     print(f"H = {H}")
-            #     print("self.stop_snr * noise_floor =", self.stop_snr * noise_floor)
-            #     print("次數", times)
-            #     break
+            # --- [修改區塊: 總位移與路徑比 收斂檢測] ---
+            # 1. 計算並記錄當前單步的距離
+            step_dist = np.linalg.norm(mu - mu_prev)
+            step_distances.append(step_dist)
+            mu_history.append(mu.copy())  # 把更新後的 mu 加進歷史軌跡
+
+            # 2. 維持滑動視窗的大小不大於 window_size
+            if len(step_distances) > window_size:
+                step_distances.pop(0)
+                mu_history.pop(0)
+
+            # 3. 當視窗填滿時，開始進行收斂檢測
+            if len(step_distances) == window_size:
+                # 總位移 D (Displacement): 視窗內起點與終點的直線距離
+                # 首尾相減，mu_history[-1] 是當前 mu，mu_history[0] 是 W 步前的 mu
+                D = np.linalg.norm(mu_history[-1] - mu_history[0])
+                
+                # 路徑總長 L (Path Length): 視窗內每一步的距離總和
+                L = sum(step_distances)
+
+                # 計算比值 R (加上 1e-12 避免除以零)
+                R = D / (L + 1e-12)
+
+                # 當比值 R 小於設定閾值時，判定為已進入原地震盪
+                # 建議的 stop_disp_ratio 約為 0.15 ~ 0.25 之間
+                if R < getattr(self, 'stop_disp_ratio', 0.2):
+                    # print(f"Converged at iter {times} with Ratio R: {R:.4f}")
+                    break
+            # ---------------------------------------
 
         action = mu[0].copy()
         if self.detect_premature:
             self.last_premature_convergence = self._check_premature(state, mu, sigma)
-        # if times == self.max_iters - 1:
-        #     print("\npure IGO complete sample-based Hit Max Iter")
+        if times == self.max_iters - 1:
+            print("\nIGO SAC-penalized Hit Max Iter")
         # warm start: shift the plan forward by one step
         self.mu = np.vstack([mu[1:], np.zeros((1, adim))])
         return action
