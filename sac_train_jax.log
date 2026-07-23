@@ -1,0 +1,13 @@
+Behavior: MPPI(H=5,N=256,explore_std=0.5) | T_trunc=6
+--------------------------------------------------------------------
+ep     1 | buf       6 | critic_dQ   n/a  | streak   0 | eval SAC   -570.65 OPT     -4.10 |     4s
+ep    25 | buf     150 | critic_dQ   n/a  | streak   0 | eval SAC   -570.65 OPT     -4.10 |     4s
+ep    50 | buf     300 | critic_dQ 9.61e-02 | streak   0 | eval SAC     -4.21 OPT     -4.10 |    18s
+ep    75 | buf     450 | critic_dQ 2.23e-02 | streak   0 | eval SAC     -4.27 OPT     -4.10 |    24s
+ep   100 | buf     600 | critic_dQ 1.40e-02 | streak   0 | eval SAC     -4.20 OPT     -4.10 |    30s
+ep   125 | buf     750 | critic_dQ 1.03e-02 | streak   0 | eval SAC     -4.15 OPT     -4.10 |    37s
+ep   150 | buf     900 | critic_dQ 9.35e-03 | streak   0 | eval SAC     -4.18 OPT     -4.10 |    43s
+ep   175 | buf    1050 | critic_dQ 7.39e-03 | streak   0 | eval SAC     -4.15 OPT     -4.10 |    50s
+ep   200 | buf    1200 | critic_dQ 5.93e-03 | streak   0 | eval SAC     -4.17 OPT     -4.10 |    57s
+--------------------------------------------------------------------
+[max_episodes] saved /tmp/sac_fulltrain.pkl | final eval SAC -3.94 vs OPT -3.87

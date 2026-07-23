@@ -1,0 +1,10 @@
+[project]
+name = "mpc-assignment"
+version = "0.1.0"
+requires-python = ">=3.14"
+dependencies = [
+    "matplotlib>=3.11.0",
+    "numpy>=2.5.0",
+    "scipy>=1.18.0",
+    "tqdm>=4.68.4",
+]

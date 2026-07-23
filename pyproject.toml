@@ -1,10 +1,30 @@
 [project]
-name = "mpc-assignment"
+name = "mpc-assignment-jax"
 version = "0.1.0"
-requires-python = ">=3.14"
+description = "JAX (GPU) reconstruction of the LQR / MPC / CEM / IGO / SAC planning testbed."
+requires-python = "==3.12.*"
 dependencies = [
-    "matplotlib>=3.11.0",
-    "numpy>=2.5.0",
-    "scipy>=1.18.0",
-    "tqdm>=4.68.4",
+    "jax[cuda12]==0.11.0",
+    "flax",
+    "optax",
+    "numpy",
+    "matplotlib",
+    "tqdm",
 ]
+
+[project.optional-dependencies]
+# torch is needed ONLY by the one-time checkpoint converter (convert_sac_ckpt.py)
+# to deserialize the original PyTorch sac_lqr.pt. The JAX runtime never imports torch.
+convert = [
+    "torch",
+]
+
+[tool.uv]
+# CPU-only torch wheels for the converter (no CUDA torch needed to read a checkpoint).
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
